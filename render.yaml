@@ -10,6 +10,8 @@ services:
     envVars:
       - key: KFM_PUBLIC_MODE
         value: "1"
+      - key: KFM_APP_DATA_DIR
+        value: "/tmp/korea_food_map"
       - key: KAKAO_REST_API_KEY
         sync: false
       - key: DATA_GO_KR_SERVICE_KEY
