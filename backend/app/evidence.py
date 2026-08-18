@@ -7,11 +7,9 @@ from difflib import SequenceMatcher
 
 _GENERIC_QUERIES = {
     "맛집", "현지인 맛집", "오래된 맛집", "로컬 맛집",
-    "카페", "카페 공간후보", "음식점", "공간후보",
+    "카페", "음식점",
 }
 
-# 추천 결과에서는 전국 대형 프랜차이즈를 기본 제외한다.
-# 후보 수집 단계에서는 가져오되, 추천 단계에서만 제거해 Recall을 해치지 않는다.
 _MAJOR_CHAIN_TOKENS = {
     "스타벅스", "메가mgc커피", "메가커피", "빽다방", "컴포즈커피",
     "이디야", "투썸플레이스", "할리스", "폴바셋", "더벤티",
@@ -93,28 +91,34 @@ def _google_component(rating: float, reviews: int) -> float:
 def build_recommendation(cluster: list[dict], province: str, city: str) -> dict | None:
     if not cluster:
         return None
-
-    # 스타벅스/빽다방/메가커피 같은 대형 체인은 후보 수집에는 포함되지만
-    # 로컬 맛집 추천 결과에서는 기본 제외한다.
     if any(is_major_chain(r.get("name")) for r in cluster):
         return None
 
     sources = sorted({str(r.get("provider") or "unknown") for r in cluster})
     queries = []
+    keyword_queries = []
     categories = []
+    discovery_modes = sorted({str(r.get("discovery_mode") or "unknown") for r in cluster})
     for row in cluster:
         q = (row.get("query_text") or "").strip()
         if q and q not in queries:
             queries.append(q)
+        if row.get("discovery_mode") == "keyword" and q and q not in keyword_queries:
+            keyword_queries.append(q)
         c = (row.get("query_category") or row.get("cuisine") or row.get("category") or "").strip()
         if c and c not in categories:
             categories.append(c)
 
-    specific_queries = [q for q in queries if _specific_query(q, city)]
+    # Spatial/Nearby inventory exists to prevent false negatives. It must never be
+    # mistaken for repeated taste evidence merely because grid cells overlap.
+    specific_queries = [q for q in keyword_queries if _specific_query(q, city)]
     source_hits: dict[str, int] = {}
+    keyword_source_hits: dict[str, int] = {}
     for row in cluster:
         provider = str(row.get("provider") or "unknown")
-        source_hits[provider] = source_hits.get(provider, 0) + int(row.get("query_hits") or 1)
+        source_hits[provider] = source_hits.get(provider, 0) + 1
+        if row.get("discovery_mode") == "keyword":
+            keyword_source_hits[provider] = keyword_source_hits.get(provider, 0) + 1
 
     google_rows = [r for r in cluster if r.get("provider") == "google"]
     google_best = max(
@@ -125,21 +129,26 @@ def build_recommendation(cluster: list[dict], province: str, city: str) -> dict 
     rating = float(google_best.get("rating") or 0)
     reviews = int(google_best.get("user_rating_count") or 0)
     google_strong = (rating >= 4.4 and reviews >= 50) or (rating >= 4.2 and reviews >= 200)
+    google_high_volume = rating >= 4.0 and reviews >= 500
 
-    kakao_hits = source_hits.get("kakao", 0)
-    naver_hits = source_hits.get("naver", 0)
     official = any(r.get("provider") == "excellent" or r.get("verified_public") for r in cluster)
     cross_source = len(sources) >= 2
-    repeated_local = kakao_hits >= 3 or naver_hits >= 3 or len(specific_queries) >= 3
+    repeated_local = (
+        keyword_source_hits.get("kakao", 0) >= 3
+        or keyword_source_hits.get("naver", 0) >= 3
+        or len(specific_queries) >= 3
+    )
 
-    # Eligibility is a union, not a Google gate. This preserves local-famous places
-    # that are repeatedly surfaced by local search but weak/missing in Google.
-    eligible = google_strong or repeated_local or (cross_source and len(specific_queries) >= 1) or official
+    # Discovery coverage and recommendation are intentionally separate:
+    # - inventory/nearby can discover a place without knowing its menu keyword
+    # - strong/high-volume user evaluation can recommend it
+    # - repeated keyword evidence or official data can recommend it without Google
+    eligible = google_strong or google_high_volume or repeated_local or official
     if not eligible:
         return None
 
     google_pts = _google_component(rating, reviews)
-    query_pts = min(30.0, len(specific_queries) * 6.0 + min(6.0, max(0, len(queries) - len(specific_queries)) * 2.0))
+    query_pts = min(30.0, len(specific_queries) * 6.0 + min(6.0, max(0, len(keyword_queries) - len(specific_queries)) * 2.0))
     source_pts = min(15.0, max(0, len(sources) - 1) * 7.5)
     official_pts = 10.0 if official else 0.0
     score = round(min(100.0, google_pts + query_pts + source_pts + official_pts), 1)
@@ -148,12 +157,14 @@ def build_recommendation(cluster: list[dict], province: str, city: str) -> dict 
         label = "공식정보+다중출처"
     elif google_strong and repeated_local:
         label = "평가+지역반복"
+    elif google_high_volume and not google_strong:
+        label = "다수평가 인기"
     elif repeated_local:
         label = "지역 반복 노출"
     elif google_strong:
         label = "사용자 평가 강함"
     else:
-        label = "다중 출처 확인"
+        label = "공식정보 확인"
 
     preferred = google_best or cluster[0]
     url_row = next((r for r in cluster if r.get("provider") == "kakao" and r.get("place_url")), None)
@@ -163,21 +174,26 @@ def build_recommendation(cluster: list[dict], province: str, city: str) -> dict 
     name = preferred.get("name") or cluster[0].get("name") or "이름없음"
     address = preferred.get("road_address") or preferred.get("address")
     if not address:
-        address = next(
-            (r.get("road_address") or r.get("address") for r in cluster if r.get("road_address") or r.get("address")),
-            None,
-        )
+        address = next((r.get("road_address") or r.get("address") for r in cluster if r.get("road_address") or r.get("address")), None)
 
     cuisine = preferred.get("cuisine") or preferred.get("query_category") or preferred.get("category") or "기타"
     if cuisine in {"전체", "맛집", "restaurant", "음식점"}:
-        cuisine = next((c for c in categories if c not in {"전체", "맛집"}), "기타")
+        cuisine = next((c for c in categories if c not in {"전체", "맛집", "음식점"}), "기타")
 
     evidence = {
         "sources": sources,
         "source_hits": source_hits,
+        "keyword_source_hits": keyword_source_hits,
+        "discovery_modes": discovery_modes,
         "queries": queries,
+        "keyword_queries": keyword_queries,
         "specific_queries": specific_queries,
-        "google": {"rating": rating, "user_rating_count": reviews, "strong": google_strong},
+        "google": {
+            "rating": rating,
+            "user_rating_count": reviews,
+            "strong": google_strong,
+            "high_volume": google_high_volume,
+        },
         "official_excellent": official,
         "score_components": {
             "google_user_evidence": round(google_pts, 1),
@@ -185,7 +201,7 @@ def build_recommendation(cluster: list[dict], province: str, city: str) -> dict 
             "source_diversity": round(source_pts, 1),
             "official_data": round(official_pts, 1),
         },
-        "rule": "Google은 필수 조건이 아니며, 지역 반복 검색·다중 출처·공식정보의 합집합으로 추천. 전국 대형 프랜차이즈는 기본 제외",
+        "rule": "후보 발견은 지역 공간검색으로 넓게 하고, 추천은 사용자평가·키워드 반복·공식정보의 실제 근거로 별도 판정. 공간 셀 중복은 맛집 근거로 계산하지 않음",
     }
 
     canonical = hashlib.sha1(f"{province}|{city}|{normalize_name(name)}|{address or ''}".encode()).hexdigest()
@@ -210,7 +226,7 @@ def build_recommendation(cluster: list[dict], province: str, city: str) -> dict 
         "rating": rating,
         "user_rating_count": reviews,
         "taste_score": score,
-        "query_hits": len(queries),
+        "query_hits": len(keyword_queries),
         "recommendation_label": label,
         "source_count": len(sources),
         "sources": sources,
