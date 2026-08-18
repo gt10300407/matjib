@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Compile Python
+        run: python -m compileall -q backend run.py
+
+      - name: Validate frontend JavaScript
+        run: |
+          node --check frontend/app-core.js
+          node --check frontend/app-map.js
+          node --check frontend/app-settings.js
+
+      - name: FastAPI import smoke test
+        env:
+          KFM_APP_DATA_DIR: /tmp/korea_food_map_ci
+          KFM_PUBLIC_MODE: '1'
+        run: python -c "from backend.app.main import app; assert app.title == 'Korea Food Map API'"
