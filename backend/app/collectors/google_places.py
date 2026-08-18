@@ -143,6 +143,38 @@ class GooglePlacesCollector:
                 out.append(row)
         return out
 
+    async def search_direct(self, province: str, city: str, query: str, bbox=None):
+        """User-triggered named-place verification.
+
+        Exactly one Google Text Search request. This is not called while typing;
+        the frontend calls it only when the user explicitly presses Enter.
+        """
+        if not self.enabled:
+            return [], {"candidate_count": 0, "api_calls": 0}
+        q = " ".join(x for x in (city.strip(), query.strip()) if x)
+        if not q:
+            return [], {"candidate_count": 0, "api_calls": 0}
+        body: dict[str, Any] = {
+            "textQuery": q,
+            "languageCode": "ko",
+            "regionCode": "KR",
+            "rankPreference": "RELEVANCE",
+            "pageSize": 10,
+        }
+        if _valid_bbox(bbox):
+            minx,miny,maxx,maxy=map(float,bbox)
+            body["locationRestriction"]={"rectangle":{"low":{"latitude":miny,"longitude":minx},"high":{"latitude":maxy,"longitude":maxx}}}
+        before = self.api_calls
+        timeout=httpx.Timeout(12.0,connect=5.0)
+        async with httpx.AsyncClient(timeout=timeout,follow_redirects=True) as client:
+            data=await self._post(client,TEXT_SEARCH_URL,body)
+        out=[]
+        for p in data.get("places",[]):
+            row=self._normalize_place(p,province,city,"전체",q,"direct_search")
+            if row:
+                out.append(row)
+        return out,{"candidate_count":len(out),"api_calls":self.api_calls-before,"query":q}
+
     async def _nearby_one(self,client:httpx.AsyncClient,province:str,city:str,circle,group:str):
         lat,lon,radius=circle
         included=["restaurant"] if group=="음식점" else ["cafe","coffee_shop","bakery"]
