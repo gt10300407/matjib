@@ -13,6 +13,8 @@ services:
         value: "1"
       - key: KFM_APP_DATA_DIR
         value: "/tmp/korea_food_map"
+      - key: GOOGLE_PLACES_API_KEY
+        sync: false
       - key: KAKAO_REST_API_KEY
         sync: false
       - key: DATA_GO_KR_SERVICE_KEY
