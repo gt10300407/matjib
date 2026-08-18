@@ -30,7 +30,7 @@ jobs:
         run: python -m compileall -q backend run.py
 
       - name: Run tests
-        run: pytest -q
+        run: python -m pytest -q
 
       - name: Validate frontend JavaScript
         run: |
