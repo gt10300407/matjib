@@ -22,9 +22,9 @@ def _public_row(row):
 class RefreshService:
     """Evidence-aggregated taste service.
 
-    Google is one evidence source, never a mandatory gate. Candidates are the union
-    of Google, Kakao menu-level searches, optional Naver local search, and official
-    excellent-restaurant data. Only candidates with enough evidence are surfaced.
+    Discovery and recommendation are separate. Spatial searches build a broad place
+    inventory; user evaluation, repeated food-intent discovery and official data
+    determine whether a place is surfaced as a recommendation.
     """
 
     def __init__(self,db):
@@ -70,6 +70,72 @@ class RefreshService:
         for r in rows:
             r["query_category"]="공식정보"; r["query_text"]=f"{city} 모범음식점"; r["query_hits"]=1
         return rows,{"candidate_count":len(rows),"api_calls":1}
+
+    def _merge_cache_rows(self,province:str,city:str,new_rows:list[dict]):
+        key=self.cache_key(province,city)
+        current=list(self.memory_cache.get(key,{}).get("restaurants",[]))
+        if not current:
+            try: current=self.taste_store.get_region(province,city,1000)
+            except Exception: current=[]
+        merged={str(r.get("provider_id")):r for r in current if r.get("provider_id")}
+        for row in new_rows:
+            pid=str(row.get("provider_id") or "")
+            if pid: merged[pid]=row
+        rows=list(merged.values())
+        rows.sort(key=lambda x:(float(x.get("taste_score") or 0),int(x.get("user_rating_count") or 0)),reverse=True)
+        old=self.memory_cache.get(key,{})
+        self.memory_cache[key]={**old,"restaurants":rows,"recommended_count":len(rows)}
+        return rows
+
+    async def live_search(self,province:str,city:str,q:str,bbox=None):
+        """Verify a named place on demand.
+
+        The top search box calls this only on Enter. It performs at most one Kakao
+        keyword request and one Google Text Search request. Google may be billable;
+        typing alone never triggers it.
+        """
+        query=q.strip()
+        if not query:
+            return {"ok":False,"message":"검색어가 비어 있어.","restaurants":[],"candidate_count":0}
+
+        google=GooglePlacesCollector(); kakao=KakaoCollector()
+        tasks=[]; names=[]
+        if kakao.enabled:
+            names.append("kakao"); tasks.append(self._safe("kakao",kakao.search_direct(province,city,query)))
+        if google.enabled:
+            names.append("google"); tasks.append(self._safe("google",google.search_direct(province,city,query,bbox)))
+        if not tasks:
+            return {"ok":False,"message":"실시간 검색에 사용할 Kakao/Google 소스가 설정되지 않았어.","restaurants":[],"candidate_count":0}
+
+        results=await asyncio.gather(*tasks)
+        source_results={}; candidates=[]
+        for name,(rows,status) in zip(names,results):
+            source_results[name]=status; candidates.extend(rows)
+
+        recommendations=merge_and_rank(candidates,province,city)
+        public_rows=[_public_row(r) for r in recommendations]
+        if public_rows:
+            self._merge_cache_rows(province,city,public_rows)
+            try: self.taste_store.upsert_region(province,city,recommendations)
+            except Exception: pass
+
+        preview=[]
+        for row in candidates[:20]:
+            preview.append({
+                "provider":row.get("provider"),"name":row.get("name"),
+                "address":row.get("road_address") or row.get("address"),
+                "rating":float(row.get("rating") or 0),
+                "user_rating_count":int(row.get("user_rating_count") or 0),
+            })
+
+        successful=[k for k,v in source_results.items() if v.get("ok")]
+        return {
+            "ok":bool(successful),"province":province,"city":city,"query":query,
+            "candidate_count":len(candidates),"recommended_count":len(public_rows),
+            "restaurants":public_rows,"candidate_preview":preview,"source_results":source_results,
+            "google_api_calls":google.api_calls,"kakao_api_calls":kakao.api_calls,
+            "billing_note":"Google 실시간 검색은 Enter를 눌렀을 때만 최대 1회 호출",
+        }
 
     async def refresh(self,province,city,bbox=None):
         google=GooglePlacesCollector(); kakao=KakaoCollector(); naver=NaverLocalCollector(); public=PublicDataCollector()
@@ -121,7 +187,7 @@ class RefreshService:
             "criteria":{
                 "google":"사용자 평점/평가 수는 강한 근거지만 필수 조건 아님",
                 "local_repeat":"세부 메뉴 검색에서 반복 노출되면 Google 미노출이어도 추천 가능",
-                "cross_source":"Kakao/Google/Naver/공식정보의 교차 출처를 가산",
+                "inventory":"Kakao 음식점/카페 4x4 공간망으로 메뉴명 미지정 후보도 발견",
                 "score":"추천 근거 점수 0~100이며 맛집일 확률(%)이 아님",
             },
         }

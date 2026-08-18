@@ -32,6 +32,7 @@ DB_PATH = get_database_path()
 LEGACY_DB_MIGRATED_FROM = migrate_legacy_db(ROOT, DB_PATH)
 db = Database(DB_PATH)
 refresh_service = RefreshService(db)
+APP_VERSION = "4.1.0"
 
 
 def seed_foods_for_region(province: str, city: str):
@@ -57,7 +58,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Korea Food Map API", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="Korea Food Map API", version=APP_VERSION, lifespan=lifespan)
 
 
 @app.exception_handler(Exception)
@@ -72,6 +73,13 @@ async def unhandled_exception_handler(request, exc):
 
 
 class RefreshRequest(BaseModel):
+    province: str
+    city: str
+    bbox: list[float] | None = None
+
+
+class LiveSearchRequest(BaseModel):
+    q: str
     province: str
     city: str
     bbox: list[float] | None = None
@@ -168,10 +176,10 @@ async def test_all_api_keys_direct(req: ApiKeysTestAllRequest):
 @app.get("/api/v1/health")
 def health():
     if PUBLIC_MODE:
-        return {"ok": True, "version": "2.0.0", "public_mode": True}
+        return {"ok": True, "version": APP_VERSION, "public_mode": True}
     return {
         "ok": True,
-        "version": "2.0.0",
+        "version": APP_VERSION,
         "db": str(db.path),
         "app_data_dir": str(APP_DATA_DIR),
         "config_env": str(CONFIG_ENV_PATH),
@@ -211,7 +219,7 @@ def stats(province: str | None = None, city: str | None = None):
         "representative_foods": food_count,
         "markets": 0,
         "markets_ready": False,
-        "definition": "verified_taste_only",
+        "definition": "evidence_aggregated_recommendation",
     }
 
 
@@ -252,7 +260,7 @@ def region(province: str, city: str, limit: int = Query(300, ge=1, le=1000)):
         "foods": foods,
         "restaurants": restaurants,
         "verified_count": len(restaurants),
-        "definition": "verified_taste_only",
+        "definition": "evidence_aggregated_recommendation",
         "last_refresh": refresh_service.get_cached_meta(province, city),
     }
 
@@ -269,6 +277,17 @@ async def refresh(req: RefreshRequest):
 @app.get("/api/v1/search")
 def search(q: str = Query(..., min_length=1), limit: int = Query(100, ge=1, le=500)):
     return {"query": q, "restaurants": refresh_service.search_verified(q, limit)}
+
+
+@app.post("/api/v1/search/live")
+async def live_search(req: LiveSearchRequest):
+    if not req.q.strip():
+        raise HTTPException(400, "q required")
+    if not req.province.strip() or not req.city.strip():
+        raise HTTPException(400, "province/city required")
+    return await refresh_service.live_search(
+        req.province.strip(), req.city.strip(), req.q.strip(), bbox=req.bbox
+    )
 
 
 @app.get("/")

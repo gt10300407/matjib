@@ -27,6 +27,16 @@ class TasteStore:
             con.execute("CREATE INDEX IF NOT EXISTS idx_verified_cuisine ON verified_restaurants(cuisine)")
             con.execute("CREATE INDEX IF NOT EXISTS idx_verified_score ON verified_restaurants(taste_score DESC)")
 
+    @staticmethod
+    def _values(province:str,city:str,r:dict,stamp:str):
+        return (
+            r["provider_id"],province,city,r.get("name") or "이름없음",
+            r.get("cuisine") or r.get("category") or "기타",r.get("primary_type"),
+            r.get("road_address") or r.get("address"),r.get("x"),r.get("y"),r.get("place_url"),
+            float(r.get("rating") or 0),int(r.get("user_rating_count") or 0),float(r.get("taste_score") or 0),
+            int(r.get("query_hits") or 0),json.dumps(r.get("raw_json") or {"evidence":r.get("evidence") or {}},ensure_ascii=False),stamp
+        )
+
     def replace_region(self,province:str,city:str,rows:list[dict]):
         stamp=now_iso()
         with self.connect() as con:
@@ -36,13 +46,28 @@ class TasteStore:
               provider_id,province,city,name,cuisine,primary_type,address,x,y,place_url,
               rating,user_rating_count,taste_score,query_hits,raw_json,updated_at
             ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """,[(
-                r["provider_id"],province,city,r.get("name") or "이름없음",
-                r.get("cuisine") or r.get("category") or "기타",r.get("primary_type"),
-                r.get("road_address") or r.get("address"),r.get("x"),r.get("y"),r.get("place_url"),
-                float(r.get("rating") or 0),int(r.get("user_rating_count") or 0),float(r.get("taste_score") or 0),
-                int(r.get("query_hits") or 0),json.dumps(r.get("raw_json") or {"evidence":r.get("evidence") or {}},ensure_ascii=False),stamp
-            ) for r in rows])
+            """,[self._values(province,city,r,stamp) for r in rows])
+        return len(rows)
+
+    def upsert_region(self,province:str,city:str,rows:list[dict]):
+        """Add/update verified direct-search results without deleting the region cache."""
+        if not rows:
+            return 0
+        stamp=now_iso()
+        with self.connect() as con:
+            con.executemany("""
+            INSERT INTO verified_restaurants(
+              provider_id,province,city,name,cuisine,primary_type,address,x,y,place_url,
+              rating,user_rating_count,taste_score,query_hits,raw_json,updated_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(provider_id) DO UPDATE SET
+              province=excluded.province, city=excluded.city, name=excluded.name,
+              cuisine=excluded.cuisine, primary_type=excluded.primary_type,
+              address=excluded.address, x=excluded.x, y=excluded.y, place_url=excluded.place_url,
+              rating=excluded.rating, user_rating_count=excluded.user_rating_count,
+              taste_score=excluded.taste_score, query_hits=excluded.query_hits,
+              raw_json=excluded.raw_json, updated_at=excluded.updated_at
+            """,[self._values(province,city,r,stamp) for r in rows])
         return len(rows)
 
     def get_region(self,province:str,city:str,limit:int=300):
@@ -84,9 +109,10 @@ class TasteStore:
         rating=float(d["rating"] or 0); reviews=int(d["user_rating_count"] or 0); score=float(d["taste_score"] or 0)
         if evidence.get("official_excellent") and len(sources)>=2: label="공식정보+다중출처"
         elif evidence.get("google",{}).get("strong") and len(evidence.get("specific_queries") or [])>=3: label="평가+지역반복"
+        elif evidence.get("google",{}).get("high_volume") and not evidence.get("google",{}).get("strong"): label="다수평가 인기"
         elif len(evidence.get("specific_queries") or [])>=3: label="지역 반복 노출"
         elif evidence.get("google",{}).get("strong"): label="사용자 평가 강함"
-        else: label="다중 출처 확인"
+        else: label="공식정보 확인"
         return {
             "provider":"aggregate","provider_id":d["provider_id"],"province":d["province"],"city":d["city"],
             "name":d["name"],"category":d["cuisine"],"cuisine":d["cuisine"],"business_type":d["primary_type"] or "restaurant",
