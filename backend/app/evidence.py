@@ -5,13 +5,30 @@ import math
 import re
 from difflib import SequenceMatcher
 
-_GENERIC_QUERIES = {"맛집", "현지인 맛집", "오래된 맛집", "로컬 맛집"}
+_GENERIC_QUERIES = {
+    "맛집", "현지인 맛집", "오래된 맛집", "로컬 맛집",
+    "카페", "카페 공간후보", "음식점", "공간후보",
+}
+
+# 추천 결과에서는 전국 대형 프랜차이즈를 기본 제외한다.
+# 후보 수집 단계에서는 가져오되, 추천 단계에서만 제거해 Recall을 해치지 않는다.
+_MAJOR_CHAIN_TOKENS = {
+    "스타벅스", "메가mgc커피", "메가커피", "빽다방", "컴포즈커피",
+    "이디야", "투썸플레이스", "할리스", "폴바셋", "더벤티",
+    "매머드커피", "매머드익스프레스", "커피빈", "파스쿠찌", "엔제리너스",
+    "탐앤탐스", "카페베네", "공차", "파리바게뜨", "뚜레쥬르",
+}
 
 
 def normalize_name(value: str | None) -> str:
     text = (value or "").lower().strip()
     text = re.sub(r"[\s\-_/·ㆍ.,()\[\]{}'\"`]+", "", text)
     return text
+
+
+def is_major_chain(value: str | None) -> bool:
+    name = normalize_name(value)
+    return any(token in name for token in _MAJOR_CHAIN_TOKENS)
 
 
 def _address_tokens(value: str | None) -> set[str]:
@@ -77,6 +94,11 @@ def build_recommendation(cluster: list[dict], province: str, city: str) -> dict 
     if not cluster:
         return None
 
+    # 스타벅스/빽다방/메가커피 같은 대형 체인은 후보 수집에는 포함되지만
+    # 로컬 맛집 추천 결과에서는 기본 제외한다.
+    if any(is_major_chain(r.get("name")) for r in cluster):
+        return None
+
     sources = sorted({str(r.get("provider") or "unknown") for r in cluster})
     queries = []
     categories = []
@@ -95,7 +117,11 @@ def build_recommendation(cluster: list[dict], province: str, city: str) -> dict 
         source_hits[provider] = source_hits.get(provider, 0) + int(row.get("query_hits") or 1)
 
     google_rows = [r for r in cluster if r.get("provider") == "google"]
-    google_best = max(google_rows, key=lambda r: (float(r.get("rating") or 0), int(r.get("user_rating_count") or 0)), default={})
+    google_best = max(
+        google_rows,
+        key=lambda r: (float(r.get("rating") or 0), int(r.get("user_rating_count") or 0)),
+        default={},
+    )
     rating = float(google_best.get("rating") or 0)
     reviews = int(google_best.get("user_rating_count") or 0)
     google_strong = (rating >= 4.4 and reviews >= 50) or (rating >= 4.2 and reviews >= 200)
@@ -130,7 +156,6 @@ def build_recommendation(cluster: list[dict], province: str, city: str) -> dict 
         label = "다중 출처 확인"
 
     preferred = google_best or cluster[0]
-    # Prefer Kakao URL for Korean users when available, otherwise Google/Naver.
     url_row = next((r for r in cluster if r.get("provider") == "kakao" and r.get("place_url")), None)
     if not url_row:
         url_row = next((r for r in cluster if r.get("place_url")), preferred)
@@ -138,7 +163,10 @@ def build_recommendation(cluster: list[dict], province: str, city: str) -> dict 
     name = preferred.get("name") or cluster[0].get("name") or "이름없음"
     address = preferred.get("road_address") or preferred.get("address")
     if not address:
-        address = next((r.get("road_address") or r.get("address") for r in cluster if r.get("road_address") or r.get("address")), None)
+        address = next(
+            (r.get("road_address") or r.get("address") for r in cluster if r.get("road_address") or r.get("address")),
+            None,
+        )
 
     cuisine = preferred.get("cuisine") or preferred.get("query_category") or preferred.get("category") or "기타"
     if cuisine in {"전체", "맛집", "restaurant", "음식점"}:
@@ -157,7 +185,7 @@ def build_recommendation(cluster: list[dict], province: str, city: str) -> dict 
             "source_diversity": round(source_pts, 1),
             "official_data": round(official_pts, 1),
         },
-        "rule": "Google은 필수 조건이 아니며, 지역 반복 검색·다중 출처·공식정보의 합집합으로 추천",
+        "rule": "Google은 필수 조건이 아니며, 지역 반복 검색·다중 출처·공식정보의 합집합으로 추천. 전국 대형 프랜차이즈는 기본 제외",
     }
 
     canonical = hashlib.sha1(f"{province}|{city}|{normalize_name(name)}|{address or ''}".encode()).hexdigest()
