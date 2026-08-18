@@ -29,11 +29,15 @@ jobs:
       - name: Compile Python
         run: python -m compileall -q backend run.py
 
+      - name: Run tests
+        run: python -m pytest -q
+
       - name: Validate frontend JavaScript
         run: |
           node --check frontend/app-core.js
           node --check frontend/app-map.js
           node --check frontend/app-settings.js
+          node --check frontend/app-taste.js
 
       - name: FastAPI import smoke test
         env:
