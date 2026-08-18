@@ -32,7 +32,7 @@ DB_PATH = get_database_path()
 LEGACY_DB_MIGRATED_FROM = migrate_legacy_db(ROOT, DB_PATH)
 db = Database(DB_PATH)
 refresh_service = RefreshService(db)
-APP_VERSION = "4.1.0"
+APP_VERSION = "4.2.0"
 
 
 def seed_foods_for_region(province: str, city: str):
@@ -214,12 +214,19 @@ def stats(province: str | None = None, city: str | None = None):
         for x in REGIONAL_FOODS
         if (not province or x.get("province") == province) and (not city or x.get("city") == city)
     )
+    public_inventory = 0
+    if province and city:
+        try:
+            public_inventory = refresh_service.taste_store.public_inventory_count(province, city)
+        except Exception:
+            public_inventory = 0
     return {
         "restaurants": refresh_service.count_verified(province, city),
+        "public_inventory": public_inventory,
         "representative_foods": food_count,
         "markets": 0,
         "markets_ready": False,
-        "definition": "evidence_aggregated_recommendation",
+        "definition": "public_master_plus_evidence_recommendation",
     }
 
 
@@ -260,7 +267,7 @@ def region(province: str, city: str, limit: int = Query(300, ge=1, le=1000)):
         "foods": foods,
         "restaurants": restaurants,
         "verified_count": len(restaurants),
-        "definition": "evidence_aggregated_recommendation",
+        "definition": "public_master_plus_evidence_recommendation",
         "last_refresh": refresh_service.get_cached_meta(province, city),
     }
 
@@ -285,9 +292,7 @@ async def live_search(req: LiveSearchRequest):
         raise HTTPException(400, "q required")
     if not req.province.strip() or not req.city.strip():
         raise HTTPException(400, "province/city required")
-    return await refresh_service.live_search(
-        req.province.strip(), req.city.strip(), req.q.strip(), bbox=req.bbox
-    )
+    return await refresh_service.live_search(req.province.strip(), req.city.strip(), req.q.strip(), bbox=req.bbox)
 
 
 @app.get("/")
