@@ -8,8 +8,8 @@ import httpx
 KEYWORD_URL = "https://dapi.kakao.com/v2/local/search/keyword.json"
 CATEGORY_URL = "https://dapi.kakao.com/v2/local/search/category.json"
 
-# These are generic food intents, not region/store hardcoding. They are evidence
-# queries only; spatial inventory is the primary discovery path when bbox exists.
+# Generic food intents only. These are evidence queries, not region/store hardcoding.
+# Spatial inventory remains the primary discovery path when bbox exists.
 BASE_TASTE_QUERY_SPECS = [
     ("전체", "{city} 맛집", "FD6"),
     ("전체", "{city} 현지인 맛집", "FD6"),
@@ -85,6 +85,12 @@ def _infer_cuisine(category_name: str | None, fallback: str) -> str:
     return fallback
 
 
+def _is_food_place(d: dict) -> bool:
+    group = str(d.get("category_group_code") or "")
+    category = str(d.get("category_name") or "")
+    return group in {"FD6", "CE7"} or "음식점" in category or "카페" in category or "제과" in category
+
+
 class KakaoCollector:
     def __init__(self):
         self.key = os.getenv("KAKAO_REST_API_KEY", "").strip()
@@ -148,7 +154,7 @@ class KakaoCollector:
         return -180 <= minx < maxx <= 180 and -90 <= miny < maxy <= 90
 
     @staticmethod
-    def _grid_rects(bbox, n: int = 3):
+    def _grid_rects(bbox, n: int = 4):
         minx, miny, maxx, maxy = map(float, bbox)
         dx = (maxx - minx) / n
         dy = (maxy - miny) / n
@@ -215,6 +221,30 @@ class KakaoCollector:
                 break
         return rows
 
+    async def search_direct(self, province: str, city: str, query: str):
+        """User-triggered exact discovery.
+
+        One Kakao keyword request; this is separate from recommendation crawling and
+        exists so the top search box can verify a named place instead of filtering a
+        stale recommendation list only.
+        """
+        if not self.enabled:
+            return [], {"candidate_count": 0, "api_calls": 0}
+        q = " ".join(x for x in (city.strip(), query.strip()) if x)
+        if not q:
+            return [], {"candidate_count": 0, "api_calls": 0}
+        before = self.api_calls
+        timeout = httpx.Timeout(10.0, connect=4.0)
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            data = await self._get(client, KEYWORD_URL, {"query": q, "page": 1, "size": 15, "sort": "accuracy"})
+        rows = []
+        for d in data.get("documents", []):
+            if not _is_food_place(d):
+                continue
+            if self._belongs_to_city(d, city):
+                rows.append(self._normalize(d, province, city, None, q, "direct_search"))
+        return rows, {"candidate_count": len(rows), "api_calls": self.api_calls - before, "query": q}
+
     async def collect_taste_candidates(self, province: str, city: str, bbox=None):
         if not self.enabled:
             return [], {"candidate_count": 0, "api_calls": 0}
@@ -233,9 +263,10 @@ class KakaoCollector:
             spatial_cells = 0
 
             # Generic city-wide inventory. No city/store names are hardcoded.
-            # 3x3 cells x FD6/CE7, up to 2 pages per cell, bounded and parallel.
+            # 4x4 cells x FD6/CE7, up to 2 pages per cell. Finer cells improve
+            # discovery without relying on a manually curated menu vocabulary.
             if self._valid_bbox(bbox):
-                rects = self._grid_rects(bbox, n=3)
+                rects = self._grid_rects(bbox, n=4)
                 spatial_cells = len(rects)
 
                 async def run_rect(rect, category, code):
@@ -255,7 +286,7 @@ class KakaoCollector:
             "keyword_queries": len(TASTE_QUERY_SPECS),
             "spatial_cells": spatial_cells,
             "spatial_categories": 2 if spatial_cells else 0,
-            "discovery_definition": "city bbox inventory + generic evidence queries",
+            "discovery_definition": "city bbox 4x4 inventory + generic evidence queries",
         }
 
     async def collect_places(self, province: str, city: str, bbox=None):
