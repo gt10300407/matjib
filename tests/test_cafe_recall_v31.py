@@ -15,10 +15,10 @@ def test_production_collector_has_no_region_specific_query_map():
     assert not hasattr(kakao_module, "REGION_SPECIAL_QUERY_SPECS")
 
 
-def test_spatial_grid_is_generic_nine_cell_coverage():
+def test_spatial_grid_is_generic_sixteen_cell_coverage():
     bbox = [126.5, 37.0, 127.0, 37.5]
-    rects = KakaoCollector._grid_rects(bbox, n=3)
-    assert len(rects) == 9
+    rects = KakaoCollector._grid_rects(bbox, n=4)
+    assert len(rects) == 16
     assert rects[0][0] == bbox[0]
     assert rects[-1][2] == bbox[2]
     assert rects[-1][3] == bbox[3]
