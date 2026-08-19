@@ -88,7 +88,7 @@ async def lifespan(app: FastAPI):
         task.cancel()
 
 
-app = FastAPI(title="Korea Food Map", version=APP_VERSION, lifespan=lifespan)
+app = FastAPI(title="Korea Food Map API", version=APP_VERSION, lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(FRONTEND)), name="static")
 
 
