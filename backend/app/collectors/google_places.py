@@ -15,7 +15,6 @@ FIELD_MASK = ",".join([
     "places.googleMapsUri", "places.businessStatus",
 ])
 
-# v4.7: broad popularity discovery only. We no longer spend paid calls on cuisine/menu buckets.
 SEARCH_SPECS = [
     ("전체", "{city} 맛집", "restaurant"),
     ("전체", "{city} 유명 맛집", "restaurant"),
@@ -55,14 +54,15 @@ def _bayesian_score(rating: float, reviews: int, prior: float = 4.2, weight: int
 
 
 def _is_verified(rating: float, reviews: int) -> bool:
-    return (rating >= 4.4 and reviews >= 50) or (rating >= 4.2 and reviews >= 200) or (rating >= 4.0 and reviews >= 500)
+    # Legacy precision helper retained. v4.7 final popularity ranking uses evidence.py rules.
+    return (rating >= 4.4 and reviews >= 50) or (rating >= 4.2 and reviews >= 200)
 
 
-def _classify(types: list[str]) -> str:
+def _classify(types: list[str], query_category: str = "전체") -> str:
     for t in types:
         if t in TYPE_TO_CUISINE:
             return TYPE_TO_CUISINE[t]
-    return "기타"
+    return query_category if query_category != "전체" else "기타"
 
 
 def _grid_circles(bbox, n: int = 2):
