@@ -32,7 +32,7 @@ DB_PATH = get_database_path()
 LEGACY_DB_MIGRATED_FROM = migrate_legacy_db(ROOT, DB_PATH)
 db = Database(DB_PATH)
 refresh_service = RefreshService(db)
-APP_VERSION = "4.3.0"
+APP_VERSION = "4.4.0"
 
 
 def seed_foods_for_region(province: str, city: str):
