@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_backend_exposes_background_refresh_contract():
     text = (ROOT / "backend" / "app" / "main.py").read_text(encoding="utf-8")
-    assert 'APP_VERSION = "4.6.0"' in text
+    assert 'APP_VERSION = "4.7.0"' in text
     assert '"/api/v1/region/refresh-async"' in text
     assert '"/api/v1/region/refresh-status"' in text
     assert "asyncio.create_task" in text

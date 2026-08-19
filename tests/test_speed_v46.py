@@ -59,19 +59,18 @@ def test_indexed_entity_resolution_avoids_global_quadratic_scan(monkeypatch):
 
     monkeypatch.setattr(evidence, "entity_match_score", counted)
     evidence.merge_and_rank(rows, "경기도", "안산시")
-    # Old all-cluster scan is ~124,750 comparisons for 500 unrelated rows.
-    # Blocking should stay well below that without changing the final scorer.
     assert calls < 10_000
 
 
-def test_collectors_keep_same_coverage_but_use_bounded_parallelism():
+def test_v47_speed_comes_from_less_work_not_only_more_parallelism():
     kakao = (ROOT / "backend/app/collectors/kakao.py").read_text(encoding="utf-8")
     google = (ROOT / "backend/app/collectors/google_places.py").read_text(encoding="utf-8")
-    public = (ROOT / "backend/app/collectors/publicdata.py").read_text(encoding="utf-8")
-    assert "asyncio.Semaphore(16)" in kakao
-    assert "asyncio.Semaphore(9)" in google
-    assert "parallel_after_first_page" in public
-    assert "asyncio.Semaphore(4)" in public
+    services = (ROOT / "backend/app/services.py").read_text(encoding="utf-8")
+    assert "asyncio.Semaphore(6)" in kakao
+    assert "asyncio.Semaphore(8)" in google
+    assert "_grid_rects" not in kakao
+    assert "licensed_inventory" not in services
+    assert "TOP_RECOMMENDATIONS = 10" in services
 
 
 def test_mobile_web_uses_true_nonblocking_refresh_controller():
