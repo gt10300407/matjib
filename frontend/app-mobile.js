@@ -18,6 +18,58 @@
   let currentView = 'map';
   let resizeTimer = null;
 
+  /*
+   * Desktop map geometry used a minimum 700px SVG viewBox. On a ~390px phone
+   * the browser therefore scaled that desktop canvas down and left a large
+   * amount of unused vertical space. Mobile must use the real rendered SVG
+   * dimensions, then enlarge the country/province group inside that viewport.
+   */
+  const desktopDims = typeof dims === 'function' ? dims : null;
+  const desktopDrawKorea = typeof drawKorea === 'function' ? drawKorea : null;
+  const desktopDrawProvince = typeof drawProvince === 'function' ? drawProvince : null;
+
+  if (desktopDims) {
+    dims = function responsiveMapDims() {
+      if (!mq.matches) return desktopDims();
+      const el = document.getElementById('map');
+      const r = el?.getBoundingClientRect?.() || { width: 0, height: 0 };
+      return [
+        Math.max(300, Math.round(r.width || window.innerWidth || 360)),
+        Math.max(420, Math.round(r.height || window.innerHeight * 0.62 || 520)),
+      ];
+    };
+  }
+
+  function scaleMobileMapGroup(selector, scale) {
+    if (!mq.matches || typeof svg === 'undefined' || typeof dims !== 'function') return;
+    const target = svg.select(selector);
+    if (target.empty()) return;
+    const group = d3.select(target.node().parentNode);
+    if (group.empty()) return;
+    const [w, h] = dims();
+    group.attr('transform', `translate(${w / 2} ${h / 2}) scale(${scale}) translate(${-w / 2} ${-h / 2})`);
+  }
+
+  if (desktopDrawKorea) {
+    drawKorea = function responsiveDrawKorea(...args) {
+      const result = desktopDrawKorea.apply(this, args);
+      if (mq.matches) {
+        requestAnimationFrame(() => scaleMobileMapGroup('.province', 1.32));
+      }
+      return result;
+    };
+  }
+
+  if (desktopDrawProvince) {
+    drawProvince = function responsiveDrawProvince(...args) {
+      const result = desktopDrawProvince.apply(this, args);
+      if (mq.matches) {
+        requestAnimationFrame(() => scaleMobileMapGroup('.municipality', 1.22));
+      }
+      return result;
+    };
+  }
+
   function redrawMapForViewport() {
     if (!mq.matches) return;
     try {
