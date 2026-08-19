@@ -18,11 +18,33 @@
   let currentView = 'map';
   let resizeTimer = null;
 
+  // Mobile is utility-first: almost no decorative motion while core behavior is being stabilized.
+  const motionStyle = document.createElement('style');
+  motionStyle.textContent = `
+    @media (max-width:767px){
+      *,*::before,*::after{
+        animation-duration:.001ms!important;
+        animation-delay:0ms!important;
+        animation-iteration-count:1!important;
+        transition-duration:.001ms!important;
+        transition-delay:0ms!important;
+        scroll-behavior:auto!important;
+      }
+    }
+  `;
+  document.head.appendChild(motionStyle);
+
+  function syncMotionPolicy() {
+    if (window.gsap?.globalTimeline?.timeScale) {
+      window.gsap.globalTimeline.timeScale(mq.matches ? 1000 : 1);
+    }
+  }
+  syncMotionPolicy();
+
   /*
-   * Desktop map geometry used a minimum 700px SVG viewBox. On a ~390px phone
-   * the browser therefore scaled that desktop canvas down and left a large
-   * amount of unused vertical space. Mobile must use the real rendered SVG
-   * dimensions, then enlarge the country/province group inside that viewport.
+   * Desktop map geometry uses a minimum 700px SVG viewBox. Mobile uses the
+   * actual rendered map size. The override is installed before the async
+   * GeoJSON load finishes, so the first real map draw already uses mobile size.
    */
   const desktopDims = typeof dims === 'function' ? dims : null;
   const desktopDrawKorea = typeof drawKorea === 'function' ? drawKorea : null;
@@ -53,8 +75,9 @@
   if (desktopDrawKorea) {
     drawKorea = function responsiveDrawKorea(...args) {
       const result = desktopDrawKorea.apply(this, args);
-      if (mq.matches) {
-        requestAnimationFrame(() => scaleMobileMapGroup('.province', 1.32));
+      if (mq.matches && typeof provinces !== 'undefined' && provinces?.features?.length) {
+        // Apply final scale in the same paint cycle: no small-map -> large-map pop.
+        scaleMobileMapGroup('.province', 1.32);
       }
       return result;
     };
@@ -64,7 +87,7 @@
     drawProvince = function responsiveDrawProvince(...args) {
       const result = desktopDrawProvince.apply(this, args);
       if (mq.matches) {
-        requestAnimationFrame(() => scaleMobileMapGroup('.municipality', 1.22));
+        scaleMobileMapGroup('.municipality', 1.22);
       }
       return result;
     };
@@ -75,10 +98,13 @@
     try {
       if (typeof mode === 'undefined') return;
       if (mode === 'korea' && typeof drawKorea === 'function') {
+        // Critical startup guard: never draw the crude fallback while GeoJSON is still loading.
+        if (typeof provinces === 'undefined') return;
+        if (!provinces?.features?.length) return;
         drawKorea();
         return;
       }
-      if (mode === 'province' && typeof provinces !== 'undefined' && provinces?.features && typeof pName === 'function' && typeof drawProvince === 'function') {
+      if (mode === 'province' && typeof provinces !== 'undefined' && provinces?.features?.length && typeof pName === 'function' && typeof drawProvince === 'function') {
         const feature = provinces.features.find(f => pName(f) === selectedProvince);
         if (feature) drawProvince(feature);
       }
@@ -106,19 +132,18 @@
       btn.setAttribute('aria-selected', active ? 'true' : 'false');
     });
 
-    if (currentView === 'map' && redraw) {
-      requestAnimationFrame(() => requestAnimationFrame(redrawMapForViewport));
-    }
+    if (currentView === 'map' && redraw) redrawMapForViewport();
   }
 
   buttons.forEach(btn => {
     btn.addEventListener('click', () => {
       applyView(btn.dataset.mobileView);
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+      window.scrollTo({ top: 0, behavior: 'auto' });
     });
   });
 
   function syncViewport() {
+    syncMotionPolicy();
     if (mq.matches) applyView(currentView, { redraw: currentView === 'map' });
     else applyView(currentView, { redraw: false });
   }
@@ -131,7 +156,7 @@
     resizeTimer = setTimeout(() => {
       syncViewport();
       if (mq.matches && currentView === 'map') redrawMapForViewport();
-    }, 180);
+    }, 120);
   }, { passive: true });
 
   const breadcrumb = document.getElementById('breadcrumb');
@@ -142,12 +167,13 @@
       const citySelected = next.split('>').length >= 3;
       if (mq.matches && next !== previous && citySelected) {
         applyView('list', { redraw: false });
-        window.scrollTo({ top: 0, behavior: 'smooth' });
+        window.scrollTo({ top: 0, behavior: 'auto' });
       }
       previous = next;
     });
     observer.observe(breadcrumb, { childList: true, subtree: true, characterData: true });
   }
 
-  applyView('map');
+  // Do not redraw on startup. app-settings.js will draw once after real GeoJSON arrives.
+  applyView('map', { redraw: false });
 })();
