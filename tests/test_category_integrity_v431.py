@@ -30,7 +30,7 @@ def test_query_category_never_becomes_cuisine_for_generic_google_restaurant():
     cuisine, detail = resolve_cluster_cuisine([row])
     assert cuisine == "기타"
     assert cuisine != row["query_category"]
-    assert detail["rule"].startswith("provider intrinsic")
+    assert "query" in detail["rule"]
 
 
 def test_google_intrinsic_type_wins_even_when_discovered_by_wrong_query_bucket():
