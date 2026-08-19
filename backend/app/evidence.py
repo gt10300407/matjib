@@ -193,13 +193,15 @@ def build_recommendation(cluster: list[dict], province: str, city: str) -> dict 
     google_high_volume = rating >= 4.0 and reviews >= 500
 
     official = any(r.get("provider") == "excellent" or r.get("verified_public") for r in cluster)
-    cross_source = len(taste_sources) >= 2
     repeated_local = (
         keyword_source_hits.get("kakao", 0) >= 3
         or keyword_source_hits.get("naver", 0) >= 3
         or len(specific_queries) >= 3
     )
-    eligible = google_strong or google_high_volume or repeated_local or official
+
+    # Official/licensing status is factual trust evidence, not proof that a place is tasty.
+    # It may boost an already-qualified recommendation but can never qualify by itself.
+    eligible = google_strong or google_high_volume or repeated_local
     if not eligible:
         return None
 
@@ -209,18 +211,14 @@ def build_recommendation(cluster: list[dict], province: str, city: str) -> dict 
     official_pts = 10.0 if official else 0.0
     score = round(min(100.0, google_pts + query_pts + source_pts + official_pts), 1)
 
-    if official and cross_source:
-        label = "공식정보+다중출처"
-    elif google_strong and repeated_local:
+    if google_strong and repeated_local:
         label = "평가+지역반복"
     elif google_high_volume and not google_strong:
         label = "다수평가 인기"
     elif repeated_local:
         label = "지역 반복 노출"
-    elif google_strong:
-        label = "사용자 평가 강함"
     else:
-        label = "공식정보 확인"
+        label = "사용자 평가 강함"
 
     preferred = _identity_preferred(cluster, google_best)
     url_row = next((r for r in cluster if r.get("provider") == "kakao" and r.get("place_url")), None)
@@ -254,7 +252,7 @@ def build_recommendation(cluster: list[dict], province: str, city: str) -> dict 
             "google_user_evidence": round(google_pts, 1), "query_repetition": round(query_pts, 1),
             "source_diversity": round(source_pts, 1), "official_data": round(official_pts, 1),
         },
-        "rule": "업체 동일성은 이름·주소·전화·좌표의 결정론적 점수로 판정하고, 음식 분류는 공급자 고유 분류/상호의 일반 규칙으로만 결정. 검색어 카테고리는 맛집 근거일 뿐 음식 분류에 사용하지 않음.",
+        "rule": "업체 동일성은 이름·주소·전화·좌표로 판정하고, 음식 분류는 공급자 고유 분류/상호 규칙으로 결정. 공공·모범음식점 정보는 존재/신뢰 보강용이며 맛집 추천 자격을 단독으로 만들지 않음.",
     }
 
     canonical = hashlib.sha1(f"{province}|{city}|{normalize_name(name)}|{address or ''}".encode()).hexdigest()
