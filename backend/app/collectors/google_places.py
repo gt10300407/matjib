@@ -15,9 +15,10 @@ FIELD_MASK = ",".join([
     "places.googleMapsUri", "places.businessStatus",
 ])
 
-# Explicit taste/popularity intents only. No cuisine/menu buckets.
+# Explicit taste/local-intent searches only. No cuisine/menu buckets.
 SEARCH_SPECS = [
     ("전체", "{city} 맛집", "restaurant"),
+    ("전체", "{city} 로컬 맛집", "restaurant"),
     ("전체", "{city} 유명 맛집", "restaurant"),
     ("카페", "{city} 인기 카페", "cafe"),
     ("카페", "{city} 유명 카페", "cafe"),
@@ -75,8 +76,8 @@ def _is_mass_market_fast_food(p: dict) -> bool:
 def _grid_circles(bbox, n: int = 2):
     """Backward-compatible helper retained for tests/tools.
 
-    v4.7.1 automatic recommendations no longer use Nearby POPULARITY because it
-    measures generic place popularity and can surface mass-market chains as 맛집.
+    Automatic recommendations do not use Nearby POPULARITY because it measures
+    generic place popularity and can surface mass-market chains as 맛집.
     """
     minx, miny, maxx, maxy = map(float, bbox)
     dx = (maxx - minx) / n
@@ -251,7 +252,7 @@ class GooglePlacesCollector:
             return [], {"candidate_count": 0, "api_calls": 0}
         self.api_calls = 0
         timeout = httpx.Timeout(12.0, connect=4.0)
-        sem = asyncio.Semaphore(4)
+        sem = asyncio.Semaphore(5)
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
             async def run_text(spec):
                 async with sem:
@@ -265,7 +266,7 @@ class GooglePlacesCollector:
             "api_calls": self.api_calls,
             "text_queries": len(SEARCH_SPECS),
             "nearby_popularity_calls": 0,
-            "discovery_definition": "4 explicit taste/popularity Text Searches; Nearby-only popularity excluded",
+            "discovery_definition": "5 explicit taste/local-intent Text Searches; Nearby-only popularity excluded",
         }
 
     async def collect_verified(self, province: str, city: str, bbox=None):
