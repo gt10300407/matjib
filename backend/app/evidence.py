@@ -5,6 +5,8 @@ import math
 import re
 from difflib import SequenceMatcher
 
+from .category_rules import resolve_cluster_cuisine
+
 _GENERIC_QUERIES = {"맛집", "현지인 맛집", "오래된 맛집", "로컬 맛집", "카페", "음식점"}
 _LICENSE_PROVIDERS = {"general", "rest_cafe", "bakery"}
 _MAJOR_CHAIN_TOKENS = {
@@ -163,7 +165,7 @@ def build_recommendation(cluster: list[dict], province: str, city: str) -> dict 
 
     sources = sorted({str(r.get("provider") or "unknown") for r in cluster})
     taste_sources = [s for s in sources if s not in _LICENSE_PROVIDERS]
-    queries, keyword_queries, categories = [], [], []
+    queries, keyword_queries = [], []
     discovery_modes = sorted({str(r.get("discovery_mode") or "unknown") for r in cluster})
     for row in cluster:
         q = (row.get("query_text") or "").strip()
@@ -171,9 +173,6 @@ def build_recommendation(cluster: list[dict], province: str, city: str) -> dict 
             queries.append(q)
         if row.get("discovery_mode") == "keyword" and q and q not in keyword_queries:
             keyword_queries.append(q)
-        c = (row.get("query_category") or row.get("cuisine") or row.get("category") or "").strip()
-        if c and c not in categories:
-            categories.append(c)
 
     specific_queries = [q for q in keyword_queries if _specific_query(q, city)]
     source_hits, keyword_source_hits = {}, {}
@@ -233,9 +232,10 @@ def build_recommendation(cluster: list[dict], province: str, city: str) -> dict 
     if not address:
         address = next((r.get("road_address") or r.get("address") for r in cluster if r.get("road_address") or r.get("address")), None)
 
-    cuisine = preferred.get("cuisine") or preferred.get("query_category") or preferred.get("category") or "기타"
-    if cuisine in {"전체", "맛집", "restaurant", "음식점", "공공 일반음식점 명부", "공공 휴게음식점 명부", "공공 제과점 명부"}:
-        cuisine = next((c for c in categories if c not in {"전체", "맛집", "음식점"} and not c.startswith("공공 ")), "기타")
+    # Critical invariant: search query category is discovery evidence only.
+    # The displayed cuisine must come from provider-owned taxonomy/metadata or a
+    # generic business-name rule, never from the query that happened to find it.
+    cuisine, category_resolution = resolve_cluster_cuisine(cluster)
 
     evidence = {
         "sources": sources,
@@ -249,11 +249,12 @@ def build_recommendation(cluster: list[dict], province: str, city: str) -> dict 
         "specific_queries": specific_queries,
         "google": {"rating": rating, "user_rating_count": reviews, "strong": google_strong, "high_volume": google_high_volume},
         "official_excellent": official,
+        "category_resolution": category_resolution,
         "score_components": {
             "google_user_evidence": round(google_pts, 1), "query_repetition": round(query_pts, 1),
             "source_diversity": round(source_pts, 1), "official_data": round(official_pts, 1),
         },
-        "rule": "업체 동일성은 이름·주소·전화·좌표의 결정론적 점수로 판정하고, 인허가 명부는 존재 확인에만 사용. 추천은 사용자평가·검색반복·모범음식점 근거로 별도 판정.",
+        "rule": "업체 동일성은 이름·주소·전화·좌표의 결정론적 점수로 판정하고, 음식 분류는 공급자 고유 분류/상호의 일반 규칙으로만 결정. 검색어 카테고리는 맛집 근거일 뿐 음식 분류에 사용하지 않음.",
     }
 
     canonical = hashlib.sha1(f"{province}|{city}|{normalize_name(name)}|{address or ''}".encode()).hexdigest()
