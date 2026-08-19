@@ -34,12 +34,13 @@ class TasteStore:
                 """
                 CREATE TABLE IF NOT EXISTS verified_restaurants(
                   provider_id TEXT PRIMARY KEY, province TEXT NOT NULL, city TEXT NOT NULL, name TEXT NOT NULL,
-                  cuisine TEXT, primary_type TEXT, address TEXT, x TEXT, y TEXT, place_url TEXT,
+                  cuisine TEXT, primary_type TEXT, address TEXT, phone TEXT, x TEXT, y TEXT, place_url TEXT,
                   rating REAL NOT NULL, user_rating_count INTEGER NOT NULL, taste_score REAL NOT NULL,
                   query_hits INTEGER NOT NULL DEFAULT 1, raw_json TEXT, updated_at TEXT NOT NULL
                 )
                 """
             )
+            self._ensure_column(con, "verified_restaurants", "phone", "TEXT")
             con.execute("CREATE INDEX IF NOT EXISTS idx_verified_region ON verified_restaurants(province,city)")
             con.execute("CREATE INDEX IF NOT EXISTS idx_verified_cuisine ON verified_restaurants(cuisine)")
             con.execute("CREATE INDEX IF NOT EXISTS idx_verified_score ON verified_restaurants(taste_score DESC)")
@@ -68,7 +69,7 @@ class TasteStore:
         return (
             r["provider_id"], province, city, r.get("name") or "이름없음",
             r.get("cuisine") or r.get("category") or "기타", r.get("primary_type"),
-            r.get("road_address") or r.get("address"), r.get("x"), r.get("y"), r.get("place_url"),
+            r.get("road_address") or r.get("address"), r.get("phone"), r.get("x"), r.get("y"), r.get("place_url"),
             float(r.get("rating") or 0), int(r.get("user_rating_count") or 0), float(r.get("taste_score") or 0),
             int(r.get("query_hits") or 0),
             json.dumps(r.get("raw_json") or {"evidence": r.get("evidence") or {}}, ensure_ascii=False), stamp,
@@ -80,9 +81,9 @@ class TasteStore:
             con.execute("DELETE FROM verified_restaurants WHERE province=? AND city=?", (province, city))
             con.executemany(
                 """INSERT INTO verified_restaurants(
-                  provider_id,province,city,name,cuisine,primary_type,address,x,y,place_url,
+                  provider_id,province,city,name,cuisine,primary_type,address,phone,x,y,place_url,
                   rating,user_rating_count,taste_score,query_hits,raw_json,updated_at
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 [self._values(province, city, r, stamp) for r in rows],
             )
         return len(rows)
@@ -94,13 +95,13 @@ class TasteStore:
         with self.connect() as con:
             con.executemany(
                 """INSERT INTO verified_restaurants(
-                  provider_id,province,city,name,cuisine,primary_type,address,x,y,place_url,
+                  provider_id,province,city,name,cuisine,primary_type,address,phone,x,y,place_url,
                   rating,user_rating_count,taste_score,query_hits,raw_json,updated_at
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(provider_id) DO UPDATE SET
                   province=excluded.province, city=excluded.city, name=excluded.name,
                   cuisine=excluded.cuisine, primary_type=excluded.primary_type,
-                  address=excluded.address, x=excluded.x, y=excluded.y, place_url=excluded.place_url,
+                  address=excluded.address, phone=excluded.phone, x=excluded.x, y=excluded.y, place_url=excluded.place_url,
                   rating=excluded.rating, user_rating_count=excluded.user_rating_count,
                   taste_score=excluded.taste_score, query_hits=excluded.query_hits,
                   raw_json=excluded.raw_json, updated_at=excluded.updated_at""",
@@ -111,7 +112,7 @@ class TasteStore:
     def get_region(self, province: str, city: str, limit: int = 300):
         with self.connect() as con:
             rows = con.execute(
-                """SELECT provider_id,province,city,name,cuisine,primary_type,address,x,y,place_url,
+                """SELECT provider_id,province,city,name,cuisine,primary_type,address,phone,x,y,place_url,
                    rating,user_rating_count,taste_score,query_hits,raw_json,updated_at
                    FROM verified_restaurants WHERE province=? AND city=?
                    ORDER BY taste_score DESC,user_rating_count DESC LIMIT ?""",
@@ -133,12 +134,12 @@ class TasteStore:
         like = f"%{q}%"
         with self.connect() as con:
             rows = con.execute(
-                """SELECT provider_id,province,city,name,cuisine,primary_type,address,x,y,place_url,
+                """SELECT provider_id,province,city,name,cuisine,primary_type,address,phone,x,y,place_url,
                    rating,user_rating_count,taste_score,query_hits,raw_json,updated_at
                    FROM verified_restaurants
-                   WHERE name LIKE ? OR city LIKE ? OR cuisine LIKE ? OR address LIKE ?
+                   WHERE name LIKE ? OR city LIKE ? OR cuisine LIKE ? OR address LIKE ? OR phone LIKE ?
                    ORDER BY taste_score DESC,user_rating_count DESC LIMIT ?""",
-                (like, like, like, like, limit),
+                (like, like, like, like, like, limit),
             ).fetchall()
         return [self._public_row(r) for r in rows]
 
@@ -257,7 +258,7 @@ class TasteStore:
             "provider": "aggregate", "provider_id": d["provider_id"], "province": d["province"], "city": d["city"],
             "name": d["name"], "category": d["cuisine"], "cuisine": d["cuisine"],
             "business_type": d["primary_type"] or "restaurant", "primary_type": d["primary_type"],
-            "address": d["address"], "road_address": d["address"], "phone": None, "x": d["x"], "y": d["y"],
+            "address": d["address"], "road_address": d["address"], "phone": d.get("phone"), "x": d["x"], "y": d["y"],
             "place_url": d["place_url"], "status": "추천 맛집", "verified_public": bool(evidence.get("official_excellent")),
             "rating": rating, "user_rating_count": reviews, "taste_score": score,
             "query_hits": int(d["query_hits"] or 0), "source_count": len(sources), "sources": sources,
