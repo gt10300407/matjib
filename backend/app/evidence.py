@@ -35,10 +35,29 @@ def _address_tokens(value: str | None) -> set[str]:
     return {x.lower() for x in text.split() if len(x) >= 2}
 
 
+def _normalized_address(value: str | None) -> str:
+    return re.sub(r"[^0-9가-힣a-z]+", "", (value or "").lower())
+
+
 def _road_number(value: str | None) -> str | None:
     text = value or ""
     nums = re.findall(r"(?<!\d)(\d+(?:-\d+)?)(?!\d)", text)
     return nums[-1] if nums else None
+
+
+def _road_block_tokens(value: str | None) -> list[str]:
+    """Return selective address tokens suitable for a blocking index.
+
+    Province/city/district tokens are shared by thousands of businesses and would
+    recreate the old quadratic scan. Prefer actual road-name tokens; otherwise use
+    a few longest non-administrative tokens.
+    """
+    tokens = list(_address_tokens(value))
+    road = [t for t in tokens if re.search(r"(?:대로|로|길)$", t)]
+    if road:
+        return sorted(road, key=len, reverse=True)[:2]
+    non_admin = [t for t in tokens if not re.search(r"(?:도|시|군|구|읍|면|동|리)$", t)]
+    return sorted(non_admin, key=len, reverse=True)[:2]
 
 
 def _coords(row):
@@ -272,13 +291,12 @@ def build_recommendation(cluster: list[dict], province: str, city: str) -> dict 
 
 
 def _blocking_keys(row: dict, *, lookup: bool = False) -> set[str]:
-    """Cheap candidate-generation keys for entity resolution.
+    """Generate selective candidates before the expensive identity score.
 
-    Old merge_and_rank compared every new row with every existing cluster. That is
-    O(n²) and gets expensive once spatial/keyword collectors return thousands of
-    duplicate observations. Blocking only narrows *which* clusters are worth the
-    expensive SequenceMatcher/address/distance score; entity_match_score remains the
-    final identity rule, so recommendation semantics do not change.
+    The old algorithm compared every row with every cluster. Broad name-prefix or
+    city/address buckets can silently recreate that O(n²) behavior, so this index
+    only uses strong/selective identity signals. The unchanged entity_match_score
+    remains the final decision rule.
     """
     keys: set[str] = set()
     provider = str(row.get("provider") or "")
@@ -288,37 +306,33 @@ def _blocking_keys(row: dict, *, lookup: bool = False) -> set[str]:
 
     name = normalize_name(row.get("name"))
     if name:
+        # Normalization already handles whitespace/punctuation variants, which is
+        # the common duplicate shape within one provider/search family.
         keys.add(f"name:{name}")
-        if len(name) >= 4:
-            keys.add(f"np:{name[:4]}")
-            keys.add(f"ns:{name[-4:]}")
-        if len(name) >= 6:
-            keys.add(f"np6:{name[:6]}")
-            keys.add(f"ns6:{name[-6:]}")
 
     phone = _phone_key(row.get("phone"))
     if len(phone) >= 8:
         keys.add(f"phone:{phone}")
 
     address = row.get("road_address") or row.get("address")
+    exact_address = _normalized_address(address)
+    if len(exact_address) >= 5:
+        keys.add(f"addr:{exact_address}")
     road_no = _road_number(address)
-    tokens = _address_tokens(address)
     if road_no:
-        keys.add(f"road:{road_no}")
-        for token in tokens:
-            if len(token) >= 2:
-                keys.add(f"roadtoken:{road_no}:{token}")
+        for token in _road_block_tokens(address):
+            keys.add(f"road:{token}:{road_no}")
 
     coord = _coords(row)
     if coord:
         lon, lat = coord
-        # ~150m cells. Lookup checks neighboring cells so <=350m candidates are
-        # still presented to the real distance scorer.
-        size = 0.0015
+        size = 0.0015  # ~130-170m per cell in Korea
         gx, gy = int(math.floor(lon / size)), int(math.floor(lat / size))
         if lookup:
-            for dx in (-2, -1, 0, 1, 2):
-                for dy in (-2, -1, 0, 1, 2):
+            # ±3 cells preserves the final scorer's <=350m candidate window even
+            # near cell boundaries. Only populated cells produce comparisons.
+            for dx in range(-3, 4):
+                for dy in range(-3, 4):
                     keys.add(f"geo:{gx+dx}:{gy+dy}")
         else:
             keys.add(f"geo:{gx}:{gy}")
