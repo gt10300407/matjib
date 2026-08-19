@@ -8,8 +8,7 @@ import httpx
 KEYWORD_URL = "https://dapi.kakao.com/v2/local/search/keyword.json"
 _TRANSIENT_HTTP = {429, 500, 502, 503, 504}
 
-# v4.7 goal: find places people already treat as notable/popular, not every shop.
-# These are broad popularity intents only; no menu-by-menu crawling and no city/store hardcoding.
+# Popularity/taste-intent discovery only. No menu-by-menu crawling and no city/store hardcoding.
 POPULARITY_QUERY_SPECS = [
     ("전체", "{city} 맛집", "FD6"),
     ("전체", "{city} 현지인 맛집", "FD6"),
@@ -19,7 +18,6 @@ POPULARITY_QUERY_SPECS = [
     ("카페", "{city} 유명 카페", "CE7"),
 ]
 
-# Backward-compatible export used by a few older modules/tests.
 TASTE_QUERY_SPECS = POPULARITY_QUERY_SPECS
 
 
@@ -48,6 +46,16 @@ def _is_food_place(d: dict) -> bool:
     group = str(d.get("category_group_code") or "")
     category = str(d.get("category_name") or "")
     return group in {"FD6", "CE7"} or "음식점" in category or "카페" in category or "제과" in category
+
+
+def _is_mass_market_fast_food(d: dict) -> bool:
+    """Generic taxonomy filter for recommendation discovery.
+
+    This deliberately does not contain franchise/store names. Direct user search still
+    returns these places; they are only excluded from automatic 'local 맛집' ranking.
+    """
+    category = str(d.get("category_name") or "")
+    return "패스트푸드" in category
 
 
 class KakaoCollector:
@@ -123,8 +131,9 @@ class KakaoCollector:
         data = await self._get(client, params)
         rows = []
         for d in data.get("documents", []):
-            if _is_food_place(d) and self._belongs_to_city(d, city):
-                rows.append(self._normalize(d, province, city, query, category, "keyword_popularity"))
+            if _is_food_place(d) and not _is_mass_market_fast_food(d) and self._belongs_to_city(d, city):
+                # evidence.py intentionally recognizes `keyword` as explicit taste-intent evidence.
+                rows.append(self._normalize(d, province, city, query, category, "keyword"))
         return rows
 
     async def search_direct(self, province: str, city: str, query: str):
@@ -149,7 +158,7 @@ class KakaoCollector:
             return [], {"candidate_count": 0, "api_calls": 0}
 
         self.api_calls = 0
-        self.last_mode = "popularity_first_keyword_discovery"
+        self.last_mode = "taste_intent_keyword_discovery"
         timeout = httpx.Timeout(10.0, connect=3.5)
         sem = asyncio.Semaphore(6)
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
@@ -165,7 +174,7 @@ class KakaoCollector:
             "api_calls": self.api_calls,
             "keyword_queries": len(POPULARITY_QUERY_SPECS),
             "spatial_cells": 0,
-            "discovery_definition": "6 broad popularity queries; no exhaustive spatial inventory",
+            "discovery_definition": "6 explicit taste/popularity queries; no exhaustive spatial inventory",
         }
 
     async def collect_places(self, province: str, city: str, bbox=None):
