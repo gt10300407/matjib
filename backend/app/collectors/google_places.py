@@ -14,7 +14,6 @@ FIELD_MASK = ",".join([
     "places.rating","places.userRatingCount","places.primaryType","places.types",
     "places.googleMapsUri","places.businessStatus",
 ])
-_TRANSIENT_HTTP = {429, 500, 502, 503, 504}
 
 SEARCH_SPECS = [
     ("전체", "{city} 맛집", "restaurant"),
@@ -119,18 +118,11 @@ class GooglePlacesCollector:
         }
 
     async def _post(self,client,url,body):
-        last_response = None
-        for attempt in range(3):
-            self.api_calls+=1
-            r=await client.post(url,headers=self._headers(),json=body)
-            last_response = r
-            if r.status_code not in _TRANSIENT_HTTP:
-                break
-            if attempt < 2:
-                await asyncio.sleep(0.30 * (2 ** attempt))
-        r = last_response
-        if r is None:
-            raise RuntimeError("Google Places 응답 없음")
+        # Google Places is billable. Do not retry automatically: one logical request
+        # must stay one billable HTTP request unless the user explicitly approves a
+        # retry policy that may increase cost.
+        self.api_calls+=1
+        r=await client.post(url,headers=self._headers(),json=body)
         if r.status_code!=200:
             try: detail=r.json()
             except Exception: detail=r.text[:500]
@@ -210,8 +202,8 @@ class GooglePlacesCollector:
             return [],{"candidate_count":0,"api_calls":0}
         self.api_calls=0
         timeout=httpx.Timeout(14.0,connect=5.0)
-        # 17 normal requests max. Nine concurrent slots complete this in at most
-        # two network waves while staying bounded and preserving the exact call set.
+        # 17 normal requests max. Nine concurrent slots finish them in at most two
+        # network waves while the exact paid request set remains unchanged.
         semaphore=asyncio.Semaphore(9)
         async with httpx.AsyncClient(timeout=timeout,follow_redirects=True) as client:
             async def run_text(spec):
