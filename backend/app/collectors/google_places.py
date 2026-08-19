@@ -14,6 +14,7 @@ FIELD_MASK = ",".join([
     "places.rating","places.userRatingCount","places.primaryType","places.types",
     "places.googleMapsUri","places.businessStatus",
 ])
+_TRANSIENT_HTTP = {429, 500, 502, 503, 504}
 
 SEARCH_SPECS = [
     ("전체", "{city} 맛집", "restaurant"),
@@ -118,8 +119,18 @@ class GooglePlacesCollector:
         }
 
     async def _post(self,client,url,body):
-        self.api_calls+=1
-        r=await client.post(url,headers=self._headers(),json=body)
+        last_response = None
+        for attempt in range(3):
+            self.api_calls+=1
+            r=await client.post(url,headers=self._headers(),json=body)
+            last_response = r
+            if r.status_code not in _TRANSIENT_HTTP:
+                break
+            if attempt < 2:
+                await asyncio.sleep(0.30 * (2 ** attempt))
+        r = last_response
+        if r is None:
+            raise RuntimeError("Google Places 응답 없음")
         if r.status_code!=200:
             try: detail=r.json()
             except Exception: detail=r.text[:500]
@@ -166,7 +177,7 @@ class GooglePlacesCollector:
             body["locationRestriction"]={"rectangle":{"low":{"latitude":miny,"longitude":minx},"high":{"latitude":maxy,"longitude":maxx}}}
         before = self.api_calls
         timeout=httpx.Timeout(12.0,connect=5.0)
-        async with httpx.AsyncClient(timeout=timeout,follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=timeout,follow_redirects=True,http2=True) as client:
             data=await self._post(client,TEXT_SEARCH_URL,body)
         out=[]
         for p in data.get("places",[]):
@@ -199,8 +210,10 @@ class GooglePlacesCollector:
             return [],{"candidate_count":0,"api_calls":0}
         self.api_calls=0
         timeout=httpx.Timeout(14.0,connect=5.0)
-        semaphore=asyncio.Semaphore(6)
-        async with httpx.AsyncClient(timeout=timeout,follow_redirects=True) as client:
+        # 17 normal requests max. Nine concurrent slots complete this in at most
+        # two network waves while staying bounded and preserving the exact call set.
+        semaphore=asyncio.Semaphore(9)
+        async with httpx.AsyncClient(timeout=timeout,follow_redirects=True,http2=True) as client:
             async def run_text(spec):
                 async with semaphore:
                     return await self._search_one(client,province,city,bbox,spec)
@@ -222,6 +235,7 @@ class GooglePlacesCollector:
             "api_calls":self.api_calls,
             "text_queries":len(SEARCH_SPECS),
             "nearby_popularity_calls":nearby_calls,
+            "concurrency":9,
             "discovery_definition":"Text Search evidence + bounded Nearby POPULARITY coverage",
         }
 
