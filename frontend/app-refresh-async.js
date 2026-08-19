@@ -76,8 +76,6 @@
           return;
         }
       } catch (err) {
-        // A status request can briefly fail during Render wake/redeploy. The data
-        // job may still be running, so keep polling instead of failing the UI.
         console.debug('[refresh-status]', err);
       }
     }
@@ -108,8 +106,6 @@
         `기존 ${Number(accepted.cached_count || 0).toLocaleString('ko-KR')}곳 즉시 사용 · 완료되면 자동 반영`
       );
       button.innerHTML = '<span>↻</span> 최신화 중';
-      // Deliberately not disabled: clicking again is cheap because the server
-      // deduplicates one in-flight task per region.
       pollStatus(province, city, token);
     } catch (err) {
       setProgress('최신화 요청 실패', err.message || String(err));
@@ -126,8 +122,6 @@
 })();
 
 // v4.8: this product is one regional 맛집 list, not a cuisine directory.
-// Keep provider category metadata internally for diagnostics/entity work, but do not
-// expose cuisine/category navigation or labels in the consumer UI.
 (() => {
   const hide = node => { if (node) node.style.display = 'none'; };
   hide(document.getElementById('filters'));
@@ -160,6 +154,15 @@
     new MutationObserver(stripCategoryLabels).observe(restaurants, { childList: true, subtree: true });
   }
 
-  // Any older filter state is neutralized; all recommendation cards are shown together.
   try { activeRestaurantFilter = '전체'; } catch (_) {}
+})();
+
+// v4.8.2 consumer card layer: keep developer evidence in the API, but render useful diner-facing facts only.
+(() => {
+  if (document.querySelector('script[data-user-info-layer]')) return;
+  const script = document.createElement('script');
+  script.src = '/static/app-user-info.js';
+  script.defer = true;
+  script.dataset.userInfoLayer = '1';
+  document.head.appendChild(script);
 })();
