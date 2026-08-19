@@ -36,7 +36,7 @@ def _row(provider, provider_id, name, address, *, rating=0.0, reviews=0, query="
 def test_indexed_entity_resolution_keeps_same_place_merge():
     rows = [
         _row("kakao", "k1", "산골미꾸라지매운탕", "경기도 안산시 단원구 소바위길 12"),
-        _row("google", "g1", "산골 미꾸라지 매운탕", "경기도 안산시 단원구 소바위길 12", rating=4.2, reviews=783, mode="nearby_popularity"),
+        _row("google", "g1", "산골 미꾸라지 매운탕", "경기도 안산시 단원구 소바위길 12", rating=4.2, reviews=783),
     ]
     out = evidence.merge_and_rank(rows, "경기도", "안산시")
     assert len(out) == 1
@@ -62,13 +62,14 @@ def test_indexed_entity_resolution_avoids_global_quadratic_scan(monkeypatch):
     assert calls < 10_000
 
 
-def test_v47_speed_comes_from_less_work_not_only_more_parallelism():
+def test_v471_speed_comes_from_smaller_taste_intent_workset():
     kakao = (ROOT / "backend/app/collectors/kakao.py").read_text(encoding="utf-8")
     google = (ROOT / "backend/app/collectors/google_places.py").read_text(encoding="utf-8")
     services = (ROOT / "backend/app/services.py").read_text(encoding="utf-8")
     assert "asyncio.Semaphore(6)" in kakao
-    assert "asyncio.Semaphore(8)" in google
+    assert "asyncio.Semaphore(4)" in google
     assert "_grid_rects" not in kakao
+    assert '"nearby_popularity_calls": 0' in google
     assert "licensed_inventory" not in services
     assert "TOP_RECOMMENDATIONS = 10" in services
 
