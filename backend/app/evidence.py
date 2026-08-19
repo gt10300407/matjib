@@ -271,19 +271,87 @@ def build_recommendation(cluster: list[dict], province: str, city: str) -> dict 
     }
 
 
+def _blocking_keys(row: dict, *, lookup: bool = False) -> set[str]:
+    """Cheap candidate-generation keys for entity resolution.
+
+    Old merge_and_rank compared every new row with every existing cluster. That is
+    O(n²) and gets expensive once spatial/keyword collectors return thousands of
+    duplicate observations. Blocking only narrows *which* clusters are worth the
+    expensive SequenceMatcher/address/distance score; entity_match_score remains the
+    final identity rule, so recommendation semantics do not change.
+    """
+    keys: set[str] = set()
+    provider = str(row.get("provider") or "")
+    provider_id = str(row.get("provider_id") or "")
+    if provider and provider_id:
+        keys.add(f"pid:{provider}:{provider_id}")
+
+    name = normalize_name(row.get("name"))
+    if name:
+        keys.add(f"name:{name}")
+        if len(name) >= 4:
+            keys.add(f"np:{name[:4]}")
+            keys.add(f"ns:{name[-4:]}")
+        if len(name) >= 6:
+            keys.add(f"np6:{name[:6]}")
+            keys.add(f"ns6:{name[-6:]}")
+
+    phone = _phone_key(row.get("phone"))
+    if len(phone) >= 8:
+        keys.add(f"phone:{phone}")
+
+    address = row.get("road_address") or row.get("address")
+    road_no = _road_number(address)
+    tokens = _address_tokens(address)
+    if road_no:
+        keys.add(f"road:{road_no}")
+        for token in tokens:
+            if len(token) >= 2:
+                keys.add(f"roadtoken:{road_no}:{token}")
+
+    coord = _coords(row)
+    if coord:
+        lon, lat = coord
+        # ~150m cells. Lookup checks neighboring cells so <=350m candidates are
+        # still presented to the real distance scorer.
+        size = 0.0015
+        gx, gy = int(math.floor(lon / size)), int(math.floor(lat / size))
+        if lookup:
+            for dx in (-2, -1, 0, 1, 2):
+                for dy in (-2, -1, 0, 1, 2):
+                    keys.add(f"geo:{gx+dx}:{gy+dy}")
+        else:
+            keys.add(f"geo:{gx}:{gy}")
+    return keys
+
+
 def merge_and_rank(rows: list[dict], province: str, city: str) -> list[dict]:
     clusters: list[list[dict]] = []
+    block_index: dict[str, set[int]] = {}
+
+    def index_row(row: dict, cluster_id: int):
+        for key in _blocking_keys(row, lookup=False):
+            block_index.setdefault(key, set()).add(cluster_id)
+
     for row in rows:
-        matched = None
+        candidate_ids: set[int] = set()
+        for key in _blocking_keys(row, lookup=True):
+            candidate_ids.update(block_index.get(key, ()))
+
+        matched_id = None
         best_score = -101.0
-        for cluster in clusters:
+        for cluster_id in candidate_ids:
+            cluster = clusters[cluster_id]
             cluster_score = max((entity_match_score(row, existing) for existing in cluster), default=-100.0)
             if cluster_score >= 55 and cluster_score > best_score:
-                matched, best_score = cluster, cluster_score
-        if matched is None:
+                matched_id, best_score = cluster_id, cluster_score
+
+        if matched_id is None:
+            matched_id = len(clusters)
             clusters.append([row])
         else:
-            matched.append(row)
+            clusters[matched_id].append(row)
+        index_row(row, matched_id)
 
     recommendations = []
     for cluster in clusters:
