@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import traceback
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -32,7 +34,31 @@ DB_PATH = get_database_path()
 LEGACY_DB_MIGRATED_FROM = migrate_legacy_db(ROOT, DB_PATH)
 db = Database(DB_PATH)
 refresh_service = RefreshService(db)
-APP_VERSION = "4.4.0"
+APP_VERSION = "4.5.0"
+
+# A refresh can fan out to many external requests. Never make a phone/browser hold
+# that HTTP request open. One in-process task per region performs the existing full
+# collector pipeline while all reads continue to use the last cached snapshot.
+_refresh_tasks: dict[tuple[str, str], asyncio.Task] = {}
+_refresh_jobs: dict[tuple[str, str], dict] = {}
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _refresh_key(province: str, city: str) -> tuple[str, str]:
+    return province.strip(), city.strip()
+
+
+def _compact_refresh_result(result: dict) -> dict:
+    keep = {
+        "ok", "partial", "province", "city", "candidate_count", "recommended_count", "verified_count",
+        "total_seen", "successful_sources", "failed_sources", "google_api_calls", "kakao_api_calls",
+        "naver_api_calls", "public_api_calls", "public_master_count", "storage", "storage_error", "source_results",
+        "definition", "criteria",
+    }
+    return {k: v for k, v in result.items() if k in keep}
 
 
 def seed_foods_for_region(province: str, city: str):
@@ -42,12 +68,42 @@ def seed_foods_for_region(province: str, city: str):
     ]
 
 
+async def _run_refresh_job(province: str, city: str, bbox: list[float] | None):
+    key = _refresh_key(province, city)
+    job = _refresh_jobs[key]
+    job["status"] = "running"
+    job["started_at"] = _utc_now()
+    try:
+        result = await refresh_service.refresh(province, city, bbox=bbox)
+        job["status"] = "completed"
+        job["finished_at"] = _utc_now()
+        job["result"] = _compact_refresh_result(result)
+        job["error"] = None
+    except asyncio.CancelledError:
+        job["status"] = "cancelled"
+        job["finished_at"] = _utc_now()
+        raise
+    except Exception as exc:
+        job["status"] = "failed"
+        job["finished_at"] = _utc_now()
+        job["error"] = {"type": type(exc).__name__, "message": str(exc) or type(exc).__name__}
+        print(f"[REFRESH] background failure {province}/{city}: {type(exc).__name__}: {exc}")
+        traceback.print_exc()
+    finally:
+        _refresh_tasks.pop(key, None)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     db.init_schema(); db.seed_foods(REGIONAL_FOODS)
     print(f"[DB] path={db.path}")
     yield
+    tasks = list(_refresh_tasks.values())
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 app = FastAPI(title="Korea Food Map API", version=APP_VERSION, lifespan=lifespan)
@@ -199,15 +255,67 @@ def db_diagnostics():
 @app.get("/api/v1/region")
 def region(province: str, city: str, limit: int = Query(300, ge=1, le=1000)):
     foods = seed_foods_for_region(province, city); restaurants = refresh_service.get_cached_restaurants(province, city, limit)
-    return {"province": province, "city": city, "foods": foods, "restaurants": restaurants, "verified_count": len(restaurants), "definition": "deterministic_entity_resolution_recommendation", "last_refresh": refresh_service.get_cached_meta(province, city)}
+    key = _refresh_key(province, city)
+    job = _refresh_jobs.get(key)
+    refresh_status = job.get("status") if job else "idle"
+    return {
+        "province": province, "city": city, "foods": foods, "restaurants": restaurants,
+        "verified_count": len(restaurants), "definition": "deterministic_entity_resolution_recommendation",
+        "last_refresh": refresh_service.get_cached_meta(province, city), "refresh_status": refresh_status,
+    }
 
 
 @app.post("/api/v1/region/refresh")
 async def refresh(req: RefreshRequest):
+    """Legacy synchronous refresh endpoint kept for diagnostics/backward compatibility."""
     if not req.province.strip() or not req.city.strip(): raise HTTPException(400, "province/city required")
     result = await refresh_service.refresh(req.province.strip(), req.city.strip(), bbox=req.bbox)
     result["foods"] = seed_foods_for_region(req.province.strip(), req.city.strip())
     return result
+
+
+@app.post("/api/v1/region/refresh-async", status_code=202)
+async def refresh_async(req: RefreshRequest):
+    province, city = req.province.strip(), req.city.strip()
+    if not province or not city:
+        raise HTTPException(400, "province/city required")
+
+    key = _refresh_key(province, city)
+    existing = _refresh_tasks.get(key)
+    cached_count = len(refresh_service.get_cached_restaurants(province, city, 1000))
+    if existing and not existing.done():
+        job = _refresh_jobs.get(key, {})
+        return {
+            "ok": True, "accepted": True, "already_running": True, "province": province, "city": city,
+            "status": job.get("status", "running"), "queued_at": job.get("queued_at"),
+            "started_at": job.get("started_at"), "cached_count": cached_count,
+            "message": "이미 최신화 중이야. 기존 저장 데이터를 계속 볼 수 있어.",
+        }
+
+    _refresh_jobs[key] = {
+        "status": "queued", "province": province, "city": city, "queued_at": _utc_now(),
+        "started_at": None, "finished_at": None, "result": None, "error": None,
+    }
+    task = asyncio.create_task(_run_refresh_job(province, city, req.bbox), name=f"refresh:{province}:{city}")
+    _refresh_tasks[key] = task
+    return {
+        "ok": True, "accepted": True, "already_running": False, "province": province, "city": city,
+        "status": "queued", "queued_at": _refresh_jobs[key]["queued_at"], "cached_count": cached_count,
+        "message": "최신화를 서버에서 시작했어. 화면을 닫거나 다른 지역을 봐도 돼.",
+    }
+
+
+@app.get("/api/v1/region/refresh-status")
+def refresh_status(province: str, city: str):
+    province, city = province.strip(), city.strip()
+    if not province or not city:
+        raise HTTPException(400, "province/city required")
+    key = _refresh_key(province, city)
+    job = _refresh_jobs.get(key)
+    cached_count = len(refresh_service.get_cached_restaurants(province, city, 1000))
+    if not job:
+        return {"ok": True, "province": province, "city": city, "status": "idle", "cached_count": cached_count}
+    return {"ok": True, **job, "cached_count": cached_count}
 
 
 @app.get("/api/v1/search")
