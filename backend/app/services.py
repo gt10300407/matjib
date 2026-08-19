@@ -11,6 +11,7 @@ from .evidence import entity_match_score, merge_and_rank, normalize_name, same_p
 from .taste_store import TasteStore
 
 TOP_RECOMMENDATIONS = 10
+_LOCAL_INTENT_TERMS = ("로컬 맛집", "현지인 맛집", "오래된 맛집")
 
 
 def _err(exc: Exception):
@@ -61,7 +62,7 @@ def _query_matches_name(query: str, name: str | None) -> bool:
 def _attach_public_inventory(discovered: list[dict], inventory: list[dict]) -> list[dict]:
     """Backward-compatible helper retained for tests/tools.
 
-    v4.7 normal region refresh intentionally does not crawl a city-wide public master.
+    Normal region refresh intentionally does not crawl a city-wide public master.
     """
     by_name: dict[str, list[dict]] = {}
     by_phone: dict[str, list[dict]] = {}
@@ -117,12 +118,19 @@ def _best_entity(rows: list[dict], query: str, city: str, bbox=None) -> dict | N
     return ranked[0]
 
 
-def _popularity_sort_key(row: dict):
-    """Popularity first, not cuisine first.
+def _local_intent_hits(row: dict) -> int:
+    evidence = row.get("evidence") or {}
+    queries = evidence.get("keyword_queries") or []
+    return sum(1 for q in queries if any(term in str(q) for term in _LOCAL_INTENT_TERMS))
 
-    Google rating/review volume is the strongest quantified signal currently available.
-    Repeated Kakao/Google discovery and source diversity break ties. Social/blog signals
-    are deliberately not fabricated until a legal/usable source is connected.
+
+def _popularity_sort_key(row: dict):
+    """Rank taste/local evidence first; Google rating is supporting evidence.
+
+    The previous tuple put Google rating/review volume first, which effectively turned
+    the result into a rating chart. Now repeated explicit taste searches, especially
+    local/현지인/오래된 intent, outrank raw review volume. Ratings remain factual
+    tie-break/support signals rather than the definition of a 맛집.
     """
     rating = float(row.get("rating") or 0)
     reviews = int(row.get("user_rating_count") or 0)
@@ -130,25 +138,32 @@ def _popularity_sort_key(row: dict):
     source_count = int(row.get("source_count") or 0)
     evidence = row.get("evidence") or {}
     keyword_hits = sum(int(v or 0) for v in (evidence.get("keyword_source_hits") or {}).values())
+    local_hits = _local_intent_hits(row)
     review_mass = math.log10(reviews + 1) if reviews > 0 else 0.0
     google_popularity = rating * review_mass if reviews > 0 else 0.0
+
+    # Local-intent hits are deliberately the largest ranking signal. Cross-source
+    # taste repetition follows, then the existing aggregate taste score. Google
+    # rating/review mass only breaks ties after those local/taste signals.
+    local_signal = local_hits * 12 + min(24, keyword_hits * 4) + max(0, source_count - 1) * 8
     return (
-        1 if reviews > 0 else 0,
-        google_popularity,
-        review_mass,
+        local_signal,
+        local_hits,
         keyword_hits,
         source_count,
-        query_hits,
         float(row.get("taste_score") or 0),
+        google_popularity,
+        review_mass,
+        query_hits,
     )
 
 
 class RefreshService:
-    """Popularity-first recommendation service.
+    """Local-taste-intent recommendation service.
 
-    Normal region refresh no longer tries to enumerate every restaurant/cafe or crawl
-    the city-wide licensing master. It discovers a compact set of already-popular
-    candidates, resolves duplicates, validates the region, and stores only TOP 10.
+    Normal region refresh does not enumerate every restaurant/cafe or crawl the
+    city-wide licensing master. It discovers a compact set from explicit 맛집/local
+    queries, resolves duplicates, validates the region, and stores TOP 10.
     """
 
     def __init__(self, db):
@@ -298,7 +313,6 @@ class RefreshService:
             source_results[name] = status
             discovered.extend(rows)
 
-        # Wrong-city results are never allowed into entity merging/ranking.
         discovered = [r for r in discovered if _belongs_to_requested_region(r, city, bbox)]
         recommendations = merge_and_rank(discovered, province, city)
         recommendations.sort(key=_popularity_sort_key, reverse=True)
@@ -316,7 +330,7 @@ class RefreshService:
             "candidate_count": source_candidate_count,
             "recommended_count": len(public_rows),
             "source_results": source_results,
-            "definition": "popularity_first_top10",
+            "definition": "local_intent_top10",
         }
 
         storage_error = None
@@ -349,14 +363,15 @@ class RefreshService:
             "storage": storage,
             "storage_error": storage_error,
             "restaurants": public_rows,
-            "definition": "popularity_first_top10",
+            "definition": "local_intent_top10",
             "criteria": {
-                "goal": "지역 음식점 전체 수집이 아니라 실제 인기/평가가 강한 TOP 10",
-                "discovery": "Google POPULARITY + 광범위 맛집/유명맛집 검색 + Kakao 인기 키워드 반복 노출",
+                "goal": "평점순이 아니라 지역에서 실제 맛집/로컬맛집으로 반복 노출되는 곳 TOP 10",
+                "discovery": "Google 맛집/로컬맛집/유명맛집/인기카페/유명카페 + Kakao 맛집/현지인맛집/로컬맛집/유명맛집/오래된맛집/인기카페/유명카페",
+                "ranking": "로컬·현지인·오래된 맛집 검색 반복 > 다중 맛집검색 반복/교차출처 > 기존 종합점수 > Google 평점·리뷰수",
                 "identity": "이름·주소·전화·좌표로 동일 업체 병합",
                 "category": "추천 여부에 사용하지 않음. 화면 표시는 공급자 메타데이터 보조값일 뿐",
                 "public_master": "일반 최신화에서 도시 전체 인허가 명부를 수집하지 않음",
-                "social": "Instagram/블로그 수치는 현재 직접 데이터 소스가 없어 조작/추정하지 않음",
+                "social": "Instagram/네이버 블로그 수치는 현재 직접 데이터 소스가 없어 조작/추정하지 않음",
                 "ai": "사용하지 않음",
             },
         }
