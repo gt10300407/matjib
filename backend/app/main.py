@@ -180,8 +180,6 @@ def save_api_key_settings(req: ApiKeySettingsRequest):
 def clear_api_key_setting(req: ApiKeyClearRequest):
     require_local_settings()
     try:
-        keys = clear_api_keys(CONFIG_ENV_PATH, req.source)
-    except NameError:
         keys = clear_api_key(CONFIG_ENV_PATH, req.source)
     except KeyError:
         raise HTTPException(status_code=400, detail="지원하지 않는 API source야.")
