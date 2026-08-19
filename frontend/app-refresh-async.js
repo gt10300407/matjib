@@ -25,7 +25,7 @@
     if (!currentRegionMatches(province, city)) return data;
     allRestaurants = Array.isArray(data.restaurants) ? data.restaurants : [];
     if (typeof renderRestaurantList === 'function') {
-      renderRestaurantList(activeRestaurantFilter || '전체');
+      renderRestaurantList('전체');
     }
     if (typeof loadStats === 'function') {
       await loadStats(province, city);
@@ -123,4 +123,43 @@
     event.stopImmediatePropagation();
     startRefresh();
   }, true);
+})();
+
+// v4.8: this product is one regional 맛집 list, not a cuisine directory.
+// Keep provider category metadata internally for diagnostics/entity work, but do not
+// expose cuisine/category navigation or labels in the consumer UI.
+(() => {
+  const hide = node => { if (node) node.style.display = 'none'; };
+  hide(document.getElementById('filters'));
+  hide(document.querySelector('.panelScroll .summary'));
+  hide(document.getElementById('foods')?.closest('section'));
+
+  const search = document.getElementById('search');
+  if (search) search.placeholder = '상호명 검색 · Enter로 직접 확인';
+
+  const title = document.querySelector('.panel .sectionTitle h3');
+  if (title && title.textContent.includes('대표 먹거리')) hide(title.closest('section'));
+
+  const restaurantHeading = [...document.querySelectorAll('.sectionTitle h3')]
+    .find(node => node.textContent.includes('추천 맛집'));
+  if (restaurantHeading) restaurantHeading.textContent = '🍴 이 지역 맛집';
+
+  function stripCategoryLabels() {
+    document.querySelectorAll('#restaurants .menu').forEach(menu => {
+      if (menu.dataset.singleTasteList === '1') return;
+      const text = menu.textContent || '';
+      const parts = text.split(' · ');
+      if (parts.length > 1) menu.textContent = parts.slice(1).join(' · ');
+      menu.dataset.singleTasteList = '1';
+    });
+  }
+
+  const restaurants = document.getElementById('restaurants');
+  stripCategoryLabels();
+  if (restaurants) {
+    new MutationObserver(stripCategoryLabels).observe(restaurants, { childList: true, subtree: true });
+  }
+
+  // Any older filter state is neutralized; all recommendation cards are shown together.
+  try { activeRestaurantFilter = '전체'; } catch (_) {}
 })();
