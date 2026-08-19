@@ -1,0 +1,123 @@
+/* v4.4 responsive/adaptive layer.
+   Desktop keeps the existing 3-column UI. Tablet stacks map + results.
+   Mobile uses the same DOM/data but switches between map and list views. */
+
+.mobileViewTabs{display:none}
+
+@media (max-width:1199px){
+  html,body{height:auto;min-height:100%;overflow-x:hidden;overflow-y:auto}
+  .app{height:auto;min-height:100dvh;overflow:visible;grid-template-rows:auto 1fr}
+  .top{height:auto;min-height:76px;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"brand actions" "search search";gap:10px 14px;padding:10px 16px}
+  .brand{grid-area:brand;min-width:0}
+  .search{grid-area:search;width:100%}
+  .topActions{grid-area:actions;min-width:0}
+  .topActions .hide{display:none}
+  .body{display:grid;grid-template-columns:minmax(0,1fr);min-height:0}
+  .rail{display:none}
+  .stage{height:58vh;min-height:440px;padding:12px}
+  .mapCard{min-height:416px}
+  .panel{min-height:620px;border-left:0;border-top:1px solid rgba(93,131,187,.13)}
+  .panelScroll{overflow:visible;max-height:none}
+  .settingsModal{max-height:calc(100dvh - 24px);overflow:auto}
+}
+
+@media (max-width:767px){
+  body{overscroll-behavior-y:none}
+  .app{grid-template-rows:auto auto 1fr;min-width:0;background:#040711}
+  .top{position:relative;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"brand actions" "search search";gap:9px 10px;padding:9px 11px;border-bottom-color:rgba(99,149,211,.18)}
+  .logo{width:38px;height:38px;border-radius:12px;font-size:20px}
+  .brand{gap:9px}
+  .brand h1{font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .brand p{display:none}
+  .topActions button:not(:last-child){display:none}
+  .topActions button:last-child{padding:6px 8px;border:1px solid rgba(66,134,211,.16);background:#081321;font-size:0;white-space:nowrap}
+  #runtimeVersion{font-size:9px;color:#8da6c8}
+  .search input{height:43px;border-radius:13px;font-size:14px;padding-left:40px;padding-right:39px}
+  .search .s{left:14px;top:10px}
+  .search .kbd{top:9px}
+
+  .mobileViewTabs{display:grid;grid-template-columns:1fr 1fr;gap:7px;padding:8px 11px;background:rgba(4,7,17,.96);border-bottom:1px solid rgba(94,137,196,.14);z-index:18}
+  .mobileViewTabs button{height:40px;border-radius:12px;border:1px solid #1d385b;background:#081321;color:#7f98ba;font-size:12px;font-weight:700}
+  .mobileViewTabs button.active{color:#dff8ff;border-color:#328df1;background:linear-gradient(180deg,rgba(45,133,255,.20),rgba(22,77,145,.12));box-shadow:inset 0 0 0 1px rgba(93,194,255,.07)}
+
+  .body{display:block;min-width:0}
+  .app.mobile-view-map .panel{display:none}
+  .app.mobile-view-list .stage{display:none}
+
+  .stage{height:calc(100dvh - 151px);min-height:430px;padding:8px}
+  .mapCard{height:100%;min-height:414px;border-radius:18px}
+  .mapTop{top:10px;left:10px;right:10px;gap:8px}
+  .crumb{min-width:0;max-width:calc(100% - 104px);padding:8px 9px;border-radius:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .mapBtns{flex:0 0 auto;gap:5px}
+  .mapBtns button{padding:7px 8px;border-radius:10px;font-size:10px}
+  .mapTitle{left:14px;top:66px;max-width:185px}
+  .eyebrow{display:none}
+  .mapTitle h2{font-size:22px;line-height:1.05;margin:0}
+  .mapTitle p{display:none}
+  #map{inset:44px 0 0;height:calc(100% - 44px)}
+  .mapBottom{left:10px;right:10px;bottom:10px}
+  .hint{display:none}
+  .mapStatus{width:100%;justify-content:flex-end}
+  .mapStatus #geo{display:none}
+  .chip{padding:6px 9px;font-size:9px;background:rgba(5,13,25,.88)}
+  .label{font-size:10px}
+  .label.sm{font-size:8.5px}
+
+  .panel{min-height:calc(100dvh - 151px);border-top:0;background:#060b14;padding-bottom:env(safe-area-inset-bottom)}
+  .panelHead{padding:13px 12px 11px}
+  .panelHead .row{gap:8px;align-items:center}
+  .panelHead h2{font-size:20px;margin-top:4px}
+  .breadcrumb{max-width:72vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .demoBadge{font-size:8.5px;padding:5px 7px;max-width:42%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .reload{margin-top:10px;padding:9px;gap:7px}
+  .reload strong{font-size:10px}
+  .reload small{font-size:9px;line-height:1.35}
+  .reload button{min-height:38px;padding:7px 9px;font-size:11px;white-space:nowrap}
+  .apiTools{gap:5px;overflow-x:auto;scrollbar-width:none}
+  .apiTools::-webkit-scrollbar{display:none}
+  .apiMini,.apiTestBtn{flex:0 0 auto}
+  .panelScroll{padding:12px 11px 38px;overflow:visible}
+  .summary{gap:6px;margin-bottom:12px}
+  .stat{padding:8px 7px}
+  .stat small{font-size:7.8px;line-height:1.3}
+  .stat b{font-size:14px}
+  .foods{gap:7px}
+  .foodCard{height:100px;border-radius:14px}
+  .foodEmoji{font-size:24px;right:10px;top:9px}
+  .foodTxt{left:10px;bottom:10px}
+  .foodTxt b{font-size:11px}
+  .filters{flex-wrap:nowrap;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none;margin:14px -11px 10px;padding:0 11px 5px}
+  .filters::-webkit-scrollbar{display:none}
+  .filters button{flex:0 0 auto;min-height:34px;padding:6px 10px;font-size:10px}
+  .restaurants{gap:9px}
+  .restaurant{grid-template-columns:46px minmax(0,1fr) auto;gap:9px;padding:10px;border-radius:14px;min-width:0}
+  .thumb{width:46px;height:46px;border-radius:11px;font-size:21px}
+  .restaurant>div:nth-child(2){min-width:0}
+  .rname{font-size:12px;line-height:1.3;overflow-wrap:anywhere}
+  .menu{font-size:9px;line-height:1.4;overflow-wrap:anywhere}
+  .tags{gap:3px}
+  .tag{font-size:8px}
+  .score{min-width:47px;font-size:8.5px}
+  .score strong{font-size:15px}
+  .placeholder{padding:20px 14px}
+
+  .modalBack{padding:10px;align-items:end}
+  .modal{width:100%;max-height:88dvh;overflow:auto;border-radius:18px 18px 12px 12px;padding:15px}
+  .settingsGrid{grid-template-columns:1fr}
+  .keyInputRow{grid-template-columns:minmax(0,1fr) auto}
+  .keyInputRow .danger{grid-column:2}
+  .toastBox{left:10px;right:10px;bottom:calc(12px + env(safe-area-inset-bottom));max-width:none}
+}
+
+@media (max-width:420px){
+  .foods{grid-template-columns:1fr}
+  .foodCard{height:88px}
+  .summary{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .restaurant{grid-template-columns:42px minmax(0,1fr) auto}
+  .thumb{width:42px;height:42px}
+  .score{min-width:42px}
+}
+
+@media (prefers-reduced-motion:reduce){
+  .mobileViewTabs *, .restaurant, .province, .municipality{scroll-behavior:auto!important;transition:none!important}
+}
