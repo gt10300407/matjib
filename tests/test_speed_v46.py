@@ -62,12 +62,12 @@ def test_indexed_entity_resolution_avoids_global_quadratic_scan(monkeypatch):
     assert calls < 10_000
 
 
-def test_v471_speed_comes_from_smaller_taste_intent_workset():
+def test_v472_speed_keeps_small_local_taste_intent_workset_parallel():
     kakao = (ROOT / "backend/app/collectors/kakao.py").read_text(encoding="utf-8")
     google = (ROOT / "backend/app/collectors/google_places.py").read_text(encoding="utf-8")
     services = (ROOT / "backend/app/services.py").read_text(encoding="utf-8")
-    assert "asyncio.Semaphore(6)" in kakao
-    assert "asyncio.Semaphore(4)" in google
+    assert "asyncio.Semaphore(7)" in kakao
+    assert "asyncio.Semaphore(5)" in google
     assert "_grid_rects" not in kakao
     assert '"nearby_popularity_calls": 0' in google
     assert "licensed_inventory" not in services
