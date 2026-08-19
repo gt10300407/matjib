@@ -8,9 +8,11 @@ from backend.app.services import TOP_RECOMMENDATIONS, _popularity_sort_key
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_v47_uses_small_broad_popularity_query_set():
-    assert len(POPULARITY_QUERY_SPECS) == 6
-    assert len(SEARCH_SPECS) == 4
+def test_v472_uses_small_local_taste_query_set():
+    assert len(POPULARITY_QUERY_SPECS) == 7
+    assert len(SEARCH_SPECS) == 5
+    assert any("로컬 맛집" in tpl for _, tpl, _ in POPULARITY_QUERY_SPECS)
+    assert any("로컬 맛집" in tpl for _, tpl, _ in SEARCH_SPECS)
     kakao_text = (ROOT / "backend" / "app" / "collectors" / "kakao.py").read_text(encoding="utf-8")
     assert "_grid_rects" not in kakao_text
     assert "짜장면 맛집" not in kakao_text
@@ -31,32 +33,39 @@ def test_region_result_is_top_ten():
     assert "recommendations = recommendations[:TOP_RECOMMENDATIONS]" in service_text
 
 
-def test_review_volume_and_rating_drive_popularity_order_after_taste_discovery():
-    high_volume = {
+def test_local_taste_evidence_outranks_raw_google_review_volume():
+    local_gem = {
         "rating": 4.2,
-        "user_rating_count": 1800,
-        "query_hits": 2,
+        "user_rating_count": 350,
+        "query_hits": 4,
         "source_count": 2,
-        "taste_score": 60,
-        "evidence": {"keyword_source_hits": {"google": 1, "kakao": 1}},
+        "taste_score": 58,
+        "evidence": {
+            "keyword_source_hits": {"google": 2, "kakao": 4},
+            "keyword_queries": ["안산시 로컬 맛집", "안산시 현지인 맛집", "안산시 오래된 맛집"],
+        },
     }
-    tiny_sample = {
+    rating_heavy = {
         "rating": 4.5,
-        "user_rating_count": 55,
-        "query_hits": 2,
-        "source_count": 2,
-        "taste_score": 70,
-        "evidence": {"keyword_source_hits": {"google": 1, "kakao": 1}},
+        "user_rating_count": 5000,
+        "query_hits": 1,
+        "source_count": 1,
+        "taste_score": 72,
+        "evidence": {
+            "keyword_source_hits": {"google": 1},
+            "keyword_queries": ["안산시 맛집"],
+        },
     }
-    assert _popularity_sort_key(high_volume) > _popularity_sort_key(tiny_sample)
+    assert _popularity_sort_key(local_gem) > _popularity_sort_key(rating_heavy)
 
 
-def test_google_paid_calls_are_reduced_and_not_retried():
+def test_google_paid_calls_are_bounded_and_not_retried():
     google_text = (ROOT / "backend" / "app" / "collectors" / "google_places.py").read_text(encoding="utf-8")
     assert "Paid API: deliberately no automatic retry" in google_text
     assert "for attempt in range" not in google_text
     assert '"nearby_popularity_calls": 0' in google_text
     assert "SEARCH_SPECS" in google_text
+    assert "asyncio.Semaphore(5)" in google_text
 
 
 def test_explicit_taste_queries_feed_existing_evidence_contract():
