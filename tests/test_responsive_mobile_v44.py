@@ -27,3 +27,11 @@ def test_mobile_controller_has_map_and_list_modes():
     assert "data-mobile-view=\"list\"" in js
     assert "MutationObserver" in js
     assert "applyView('list'" in js
+
+
+def test_mobile_map_uses_real_viewport_instead_of_desktop_700px_canvas():
+    js = (ROOT / "frontend" / "app-mobile.js").read_text(encoding="utf-8")
+    assert "responsiveMapDims" in js
+    assert "getBoundingClientRect" in js
+    assert "scaleMobileMapGroup('.province', 1.32)" in js
+    assert "scaleMobileMapGroup('.municipality', 1.22)" in js
