@@ -118,6 +118,9 @@ class GooglePlacesCollector:
         }
 
     async def _post(self,client,url,body):
+        # Google Places is billable. Do not retry automatically: one logical request
+        # must stay one billable HTTP request unless the user explicitly approves a
+        # retry policy that may increase cost.
         self.api_calls+=1
         r=await client.post(url,headers=self._headers(),json=body)
         if r.status_code!=200:
@@ -199,7 +202,9 @@ class GooglePlacesCollector:
             return [],{"candidate_count":0,"api_calls":0}
         self.api_calls=0
         timeout=httpx.Timeout(14.0,connect=5.0)
-        semaphore=asyncio.Semaphore(6)
+        # 17 normal requests max. Nine concurrent slots finish them in at most two
+        # network waves while the exact paid request set remains unchanged.
+        semaphore=asyncio.Semaphore(9)
         async with httpx.AsyncClient(timeout=timeout,follow_redirects=True) as client:
             async def run_text(spec):
                 async with semaphore:
@@ -222,6 +227,7 @@ class GooglePlacesCollector:
             "api_calls":self.api_calls,
             "text_queries":len(SEARCH_SPECS),
             "nearby_popularity_calls":nearby_calls,
+            "concurrency":9,
             "discovery_definition":"Text Search evidence + bounded Nearby POPULARITY coverage",
         }
 

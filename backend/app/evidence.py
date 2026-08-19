@@ -35,10 +35,29 @@ def _address_tokens(value: str | None) -> set[str]:
     return {x.lower() for x in text.split() if len(x) >= 2}
 
 
+def _normalized_address(value: str | None) -> str:
+    return re.sub(r"[^0-9가-힣a-z]+", "", (value or "").lower())
+
+
 def _road_number(value: str | None) -> str | None:
     text = value or ""
     nums = re.findall(r"(?<!\d)(\d+(?:-\d+)?)(?!\d)", text)
     return nums[-1] if nums else None
+
+
+def _road_block_tokens(value: str | None) -> list[str]:
+    """Return selective address tokens suitable for a blocking index.
+
+    Province/city/district tokens are shared by thousands of businesses and would
+    recreate the old quadratic scan. Prefer actual road-name tokens; otherwise use
+    a few longest non-administrative tokens.
+    """
+    tokens = list(_address_tokens(value))
+    road = [t for t in tokens if re.search(r"(?:대로|로|길)$", t)]
+    if road:
+        return sorted(road, key=len, reverse=True)[:2]
+    non_admin = [t for t in tokens if not re.search(r"(?:도|시|군|구|읍|면|동|리)$", t)]
+    return sorted(non_admin, key=len, reverse=True)[:2]
 
 
 def _coords(row):
@@ -271,19 +290,82 @@ def build_recommendation(cluster: list[dict], province: str, city: str) -> dict 
     }
 
 
+def _blocking_keys(row: dict, *, lookup: bool = False) -> set[str]:
+    """Generate selective candidates before the expensive identity score.
+
+    The old algorithm compared every row with every cluster. Broad name-prefix or
+    city/address buckets can silently recreate that O(n²) behavior, so this index
+    only uses strong/selective identity signals. The unchanged entity_match_score
+    remains the final decision rule.
+    """
+    keys: set[str] = set()
+    provider = str(row.get("provider") or "")
+    provider_id = str(row.get("provider_id") or "")
+    if provider and provider_id:
+        keys.add(f"pid:{provider}:{provider_id}")
+
+    name = normalize_name(row.get("name"))
+    if name:
+        # Normalization already handles whitespace/punctuation variants, which is
+        # the common duplicate shape within one provider/search family.
+        keys.add(f"name:{name}")
+
+    phone = _phone_key(row.get("phone"))
+    if len(phone) >= 8:
+        keys.add(f"phone:{phone}")
+
+    address = row.get("road_address") or row.get("address")
+    exact_address = _normalized_address(address)
+    if len(exact_address) >= 5:
+        keys.add(f"addr:{exact_address}")
+    road_no = _road_number(address)
+    if road_no:
+        for token in _road_block_tokens(address):
+            keys.add(f"road:{token}:{road_no}")
+
+    coord = _coords(row)
+    if coord:
+        lon, lat = coord
+        size = 0.0015  # ~130-170m per cell in Korea
+        gx, gy = int(math.floor(lon / size)), int(math.floor(lat / size))
+        if lookup:
+            # ±3 cells preserves the final scorer's <=350m candidate window even
+            # near cell boundaries. Only populated cells produce comparisons.
+            for dx in range(-3, 4):
+                for dy in range(-3, 4):
+                    keys.add(f"geo:{gx+dx}:{gy+dy}")
+        else:
+            keys.add(f"geo:{gx}:{gy}")
+    return keys
+
+
 def merge_and_rank(rows: list[dict], province: str, city: str) -> list[dict]:
     clusters: list[list[dict]] = []
+    block_index: dict[str, set[int]] = {}
+
+    def index_row(row: dict, cluster_id: int):
+        for key in _blocking_keys(row, lookup=False):
+            block_index.setdefault(key, set()).add(cluster_id)
+
     for row in rows:
-        matched = None
+        candidate_ids: set[int] = set()
+        for key in _blocking_keys(row, lookup=True):
+            candidate_ids.update(block_index.get(key, ()))
+
+        matched_id = None
         best_score = -101.0
-        for cluster in clusters:
+        for cluster_id in candidate_ids:
+            cluster = clusters[cluster_id]
             cluster_score = max((entity_match_score(row, existing) for existing in cluster), default=-100.0)
             if cluster_score >= 55 and cluster_score > best_score:
-                matched, best_score = cluster, cluster_score
-        if matched is None:
+                matched_id, best_score = cluster_id, cluster_score
+
+        if matched_id is None:
+            matched_id = len(clusters)
             clusters.append([row])
         else:
-            matched.append(row)
+            clusters[matched_id].append(row)
+        index_row(row, matched_id)
 
     recommendations = []
     for cluster in clusters:

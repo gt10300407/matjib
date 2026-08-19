@@ -3,14 +3,14 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
-<title>Korea Food Map v4.5</title>
+<title>Korea Food Map v4.6</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🍜</text></svg>">
 <link rel="stylesheet" href="/static/app.css">
 <link rel="stylesheet" href="/static/responsive.css">
 </head>
 <body>
 <div class="app">
-<header class="top"><div class="brand"><div class="logo">🍜</div><div><h1>대한민국 지역 맛집 지도</h1><p>지역을 누르면 먹거리와 추천 맛집이 열린다</p></div></div><div class="search"><span class="s">⌕</span><input id="search" placeholder="상호명·음식 검색 · Enter로 실시간 확인"/><span class="kbd">↵</span></div><div class="topActions"><button class="hide">🔥 오늘의 맛집</button><button class="hide">☆ 찜 목록</button><button>● LIVE DATA · <span id="runtimeVersion">SERVER v4.5.0</span></button></div></header>
+<header class="top"><div class="brand"><div class="logo">🍜</div><div><h1>대한민국 지역 맛집 지도</h1><p>지역을 누르면 먹거리와 추천 맛집이 열린다</p></div></div><div class="search"><span class="s">⌕</span><input id="search" placeholder="상호명·음식 검색 · Enter로 실시간 확인"/><span class="kbd">↵</span></div><div class="topActions"><button class="hide">🔥 오늘의 맛집</button><button class="hide">☆ 찜 목록</button><button>● LIVE DATA · <span id="runtimeVersion">SERVER v4.6.0</span></button></div></header>
 <div class="body">
 <aside class="rail"><div class="railGroup"><button class="active"><i>⌖</i><span>지역 지도</span></button><button><i>♡</i><span>찜 맛집</span></button><button><i>♜</i><span>테마</span></button><button><i>⌁</i><span>코스</span></button></div><div class="railGroup"><button id="settingsBtn" type="button"><i>⚙</i><span>설정</span></button></div></aside>
 <main class="stage"><section class="mapCard"><div class="mapTop"><div class="crumb" id="crumb"><b>대한민국</b> · 시·도 선택</div><div class="mapBtns"><button id="back" style="display:none">← 전국 지도</button><button id="recenter">◎ 전체 보기</button></div></div><div class="mapTitle"><div class="eyebrow"><span class="pulseDot"></span>&nbsp; interactive food atlas</div><h2 id="mapHeading">어디부터<br/>먹어볼까?</h2><p id="mapSub">시·도에 마우스를 올리고 클릭해. 선택한 지역이 확대되면서 시·군이 열린다.</p></div><svg id="map"><defs><linearGradient id="selectedGrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1e75ff"/><stop offset=".55" stop-color="#147fd2"/><stop offset="1" stop-color="#7447ff"/></linearGradient></defs></svg><div class="mapBottom"><div class="hint" id="hint"><b>대한민국 지도</b><br/>모든 시·도는 같은 기본 색상으로 표시되고, 선택한 지역만 강조돼. 경기도를 누르면 시·군 경계가 열린다.</div><div class="mapStatus"><span class="chip ok" id="geo">● GeoJSON 연결 중</span><span class="chip" id="sel">선택: 대한민국</span></div></div></section></main>
@@ -26,5 +26,5 @@
 <script src="/static/app-settings.js"></script>
 <script src="/static/app-taste.js"></script>
 <script src="/static/app-mobile.js"></script>
-<script src="/static/app-fast-refresh.js"></script>
+<script src="/static/app-refresh-async.js"></script>
 </body></html>

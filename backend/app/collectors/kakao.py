@@ -7,6 +7,7 @@ import httpx
 
 KEYWORD_URL = "https://dapi.kakao.com/v2/local/search/keyword.json"
 CATEGORY_URL = "https://dapi.kakao.com/v2/local/search/category.json"
+_TRANSIENT_HTTP = {429, 500, 502, 503, 504}
 
 # Generic food intents only. These are evidence queries, not region/store hardcoding.
 # Spatial inventory remains the primary discovery path when bbox exists.
@@ -169,8 +170,18 @@ class KakaoCollector:
         return rects
 
     async def _get(self, client, url, params):
-        self.api_calls += 1
-        r = await client.get(url, headers=self._headers(), params=params)
+        last_response = None
+        for attempt in range(3):
+            self.api_calls += 1
+            r = await client.get(url, headers=self._headers(), params=params)
+            last_response = r
+            if r.status_code not in _TRANSIENT_HTTP:
+                break
+            if attempt < 2:
+                await asyncio.sleep(0.25 * (2 ** attempt))
+        r = last_response
+        if r is None:
+            raise RuntimeError("Kakao 응답 없음")
         if r.status_code != 200:
             try:
                 body = r.json()
@@ -252,7 +263,10 @@ class KakaoCollector:
         self.api_calls = 0
         self.last_mode = "generic_spatial_inventory_plus_evidence_queries"
         timeout = httpx.Timeout(12.0, connect=4.0)
-        sem = asyncio.Semaphore(12)
+        # Keep the exact query/spatial coverage, but finish it in fewer network
+        # waves. Transient 429/5xx responses back off and retry instead of failing
+        # the full region refresh.
+        sem = asyncio.Semaphore(16)
 
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
             async def run_keyword(spec):
@@ -286,6 +300,7 @@ class KakaoCollector:
             "keyword_queries": len(TASTE_QUERY_SPECS),
             "spatial_cells": spatial_cells,
             "spatial_categories": 2 if spatial_cells else 0,
+            "concurrency": 16,
             "discovery_definition": "city bbox 4x4 inventory + generic evidence queries",
         }
 

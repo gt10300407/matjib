@@ -34,7 +34,7 @@ DB_PATH = get_database_path()
 LEGACY_DB_MIGRATED_FROM = migrate_legacy_db(ROOT, DB_PATH)
 db = Database(DB_PATH)
 refresh_service = RefreshService(db)
-APP_VERSION = "4.5.0"
+APP_VERSION = "4.6.0"
 
 # A refresh can fan out to many external requests. Never make a phone/browser hold
 # that HTTP request open. One in-process task per region performs the existing full

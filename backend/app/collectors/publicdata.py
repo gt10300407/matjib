@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 import os
 
 import httpx
@@ -17,6 +18,7 @@ EXCELLENT_URL = "https://apis.data.go.kr/1741000/excellent_restaurant_info/info"
 _RECORD_KEYS = {"BPLC_NM", "BSNSSP_NM", "ROAD_NM_ADDR", "SITE_WHL_ADDR", "PRINC_FD_KND"}
 _TOTAL_KEYS = {"totalCount", "total_count", "totCnt", "totalCnt", "matchCount"}
 _CLOSED_WORDS = ("폐업", "취소", "말소", "종료", "직권말소")
+_TRANSIENT_HTTP = {429, 500, 502, 503, 504}
 
 LICENSE_SOURCES = (
     ("general", "일반음식점", GENERAL_URL),
@@ -155,8 +157,18 @@ class PublicDataCollector:
             "returnType": "json",
             **params,
         }
-        self.api_calls += 1
-        r = await client.get(url, params=payload_params)
+        last_response = None
+        for attempt in range(3):
+            self.api_calls += 1
+            r = await client.get(url, params=payload_params)
+            last_response = r
+            if r.status_code not in _TRANSIENT_HTTP:
+                break
+            if attempt < 2:
+                await asyncio.sleep(0.35 * (2 ** attempt))
+        r = last_response
+        if r is None:
+            raise RuntimeError("공공데이터 API 응답 없음")
         text = r.text[:12000]
         code, msg = _extract_public_error(text)
         if r.status_code != 200:
@@ -197,21 +209,46 @@ class PublicDataCollector:
         total = None
         pages = 0
 
+        def consume(batch):
+            for d in batch:
+                if _belongs_to_city(d, city) and _is_active(d):
+                    out.append(normalize_license_row(d, province, city, provider, license_type))
+
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-            for page in range(1, max_pages + 1):
-                batch, page_total = await self._page(client, url, params, page, page_size)
-                pages = page
-                if total is None and page_total is not None:
-                    total = page_total
-                for d in batch:
-                    if _belongs_to_city(d, city) and _is_active(d):
-                        out.append(normalize_license_row(d, province, city, provider, license_type))
-                if not batch:
-                    break
-                if total is not None and page * page_size >= total:
-                    break
-                if len(batch) < page_size:
-                    break
+            # First page establishes the total. Once the total is known, remaining
+            # pages are independent and can be fetched concurrently without changing
+            # the number of normal API calls or the resulting dataset.
+            first, total = await self._page(client, url, params, 1, page_size)
+            pages = 1
+            consume(first)
+
+            if first and total is not None:
+                total_pages = min(max_pages, max(1, math.ceil(total / page_size)))
+                sem = asyncio.Semaphore(4)
+
+                async def fetch_page(page_no: int):
+                    async with sem:
+                        batch, _ = await self._page(client, url, params, page_no, page_size)
+                        return page_no, batch
+
+                if total_pages > 1:
+                    fetched = await asyncio.gather(*(fetch_page(p) for p in range(2, total_pages + 1)))
+                    for page_no, batch in sorted(fetched, key=lambda x: x[0]):
+                        pages = max(pages, page_no)
+                        consume(batch)
+            elif first and total is None:
+                # Some public-data responses omit totalCount. Preserve the old
+                # sequential short-page termination rule in that case.
+                for page in range(2, max_pages + 1):
+                    batch, page_total = await self._page(client, url, params, page, page_size)
+                    pages = page
+                    if total is None and page_total is not None:
+                        total = page_total
+                    consume(batch)
+                    if not batch or len(batch) < page_size:
+                        break
+                    if total is not None and page * page_size >= total:
+                        break
 
         dedup = {row["provider_id"]: row for row in out}
         rows = list(dedup.values())
@@ -225,6 +262,7 @@ class PublicDataCollector:
             "page_size": page_size,
             "truncated": truncated,
             "license_type": license_type,
+            "pagination_mode": "parallel_after_first_page" if total is not None else "sequential_unknown_total",
         }
 
     async def licensed_inventory(self, province: str, city: str):
