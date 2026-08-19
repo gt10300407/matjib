@@ -15,6 +15,7 @@ FIELD_MASK = ",".join([
     "places.googleMapsUri", "places.businessStatus",
 ])
 
+# Explicit taste/popularity intents only. No cuisine/menu buckets.
 SEARCH_SPECS = [
     ("전체", "{city} 맛집", "restaurant"),
     ("전체", "{city} 유명 맛집", "restaurant"),
@@ -54,7 +55,6 @@ def _bayesian_score(rating: float, reviews: int, prior: float = 4.2, weight: int
 
 
 def _is_verified(rating: float, reviews: int) -> bool:
-    # Legacy precision helper retained. v4.7 final popularity ranking uses evidence.py rules.
     return (rating >= 4.4 and reviews >= 50) or (rating >= 4.2 and reviews >= 200)
 
 
@@ -65,7 +65,19 @@ def _classify(types: list[str], query_category: str = "전체") -> str:
     return query_category if query_category != "전체" else "기타"
 
 
+def _is_mass_market_fast_food(p: dict) -> bool:
+    """Taxonomy-based automatic-recommendation exclusion, not a brand list."""
+    types = set(p.get("types") or [])
+    primary = str(p.get("primaryType") or "")
+    return primary == "fast_food_restaurant" or "fast_food_restaurant" in types
+
+
 def _grid_circles(bbox, n: int = 2):
+    """Backward-compatible helper retained for tests/tools.
+
+    v4.7.1 automatic recommendations no longer use Nearby POPULARITY because it
+    measures generic place popularity and can surface mass-market chains as 맛집.
+    """
     minx, miny, maxx, maxy = map(float, bbox)
     dx = (maxx - minx) / n
     dy = (maxy - miny) / n
@@ -168,7 +180,9 @@ class GooglePlacesCollector:
         data = await self._post(client, TEXT_SEARCH_URL, body)
         out = []
         for p in data.get("places", []):
-            row = self._normalize_place(p, province, city, query, "keyword_popularity")
+            if _is_mass_market_fast_food(p):
+                continue
+            row = self._normalize_place(p, province, city, query, "keyword")
             if row:
                 out.append(row)
         return out
@@ -206,6 +220,7 @@ class GooglePlacesCollector:
         return out, {"candidate_count": len(out), "api_calls": self.api_calls - before, "query": q}
 
     async def _nearby_one(self, client: httpx.AsyncClient, province: str, city: str, circle, group: str):
+        """Retained for diagnostics/backward compatibility; not used by automatic refresh."""
         lat, lon, radius = circle
         included = ["restaurant"] if group == "음식점" else ["cafe", "coffee_shop", "bakery"]
         body = {
@@ -224,6 +239,8 @@ class GooglePlacesCollector:
         data = await self._post(client, NEARBY_SEARCH_URL, body)
         out = []
         for p in data.get("places", []):
+            if _is_mass_market_fast_food(p):
+                continue
             row = self._normalize_place(p, province, city, f"{city} {group} 인기도 주변검색", "nearby_popularity")
             if row:
                 out.append(row)
@@ -234,35 +251,21 @@ class GooglePlacesCollector:
             return [], {"candidate_count": 0, "api_calls": 0}
         self.api_calls = 0
         timeout = httpx.Timeout(12.0, connect=4.0)
-        sem = asyncio.Semaphore(8)
+        sem = asyncio.Semaphore(4)
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
             async def run_text(spec):
                 async with sem:
                     return await self._search_one(client, province, city, bbox, spec)
 
-            tasks = [run_text(spec) for spec in SEARCH_SPECS]
-            nearby_calls = 0
-            if _valid_bbox(bbox):
-                circles = _grid_circles(bbox, n=2)
-
-                async def run_nearby(circle, group):
-                    async with sem:
-                        return await self._nearby_one(client, province, city, circle, group)
-
-                for circle in circles:
-                    tasks.append(run_nearby(circle, "음식점"))
-                    tasks.append(run_nearby(circle, "카페"))
-                    nearby_calls += 2
-
-            batches = await asyncio.gather(*tasks)
+            batches = await asyncio.gather(*(run_text(spec) for spec in SEARCH_SPECS))
 
         rows = [r for batch in batches for r in batch]
         return rows, {
             "candidate_count": len(rows),
             "api_calls": self.api_calls,
             "text_queries": len(SEARCH_SPECS),
-            "nearby_popularity_calls": nearby_calls,
-            "discovery_definition": "4 broad text searches + Nearby POPULARITY coverage",
+            "nearby_popularity_calls": 0,
+            "discovery_definition": "4 explicit taste/popularity Text Searches; Nearby-only popularity excluded",
         }
 
     async def collect_verified(self, province: str, city: str, bbox=None):
