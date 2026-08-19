@@ -177,7 +177,7 @@ class GooglePlacesCollector:
             body["locationRestriction"]={"rectangle":{"low":{"latitude":miny,"longitude":minx},"high":{"latitude":maxy,"longitude":maxx}}}
         before = self.api_calls
         timeout=httpx.Timeout(12.0,connect=5.0)
-        async with httpx.AsyncClient(timeout=timeout,follow_redirects=True,http2=True) as client:
+        async with httpx.AsyncClient(timeout=timeout,follow_redirects=True) as client:
             data=await self._post(client,TEXT_SEARCH_URL,body)
         out=[]
         for p in data.get("places",[]):
@@ -213,7 +213,7 @@ class GooglePlacesCollector:
         # 17 normal requests max. Nine concurrent slots complete this in at most
         # two network waves while staying bounded and preserving the exact call set.
         semaphore=asyncio.Semaphore(9)
-        async with httpx.AsyncClient(timeout=timeout,follow_redirects=True,http2=True) as client:
+        async with httpx.AsyncClient(timeout=timeout,follow_redirects=True) as client:
             async def run_text(spec):
                 async with semaphore:
                     return await self._search_one(client,province,city,bbox,spec)
